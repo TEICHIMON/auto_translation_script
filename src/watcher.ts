@@ -1,0 +1,136 @@
+import chokidar from 'chokidar';
+import fs from 'fs/promises';
+import path from 'path';
+import { getConfig, getLanguageConfig } from './config';
+import { convertSrtFileToLrc } from './converter';
+import { translateWithOpenRouter } from './translator';
+import { syncFilesToTarget } from './sync';
+
+/**
+ * 处理单个 SRT 文件
+ */
+async function processSrtFile(srtFilePath: string): Promise<void> {
+    const fileName = path.basename(srtFilePath);
+    const baseName = fileName.replace(/\.srt$/i, '');
+    const dirName = path.dirname(srtFilePath);
+    const outputDir = path.join(dirName, 'output');
+    const lrcFilePath = path.join(outputDir, `${baseName}.lrc`);
+
+    // 确保 output 文件夹存在
+    try {
+        await fs.mkdir(outputDir, { recursive: true });
+    } catch (error) {
+        console.error(`创建 output 文件夹失败: ${error}`);
+        return;
+    }
+
+    // 检查 LRC 文件是否已存在
+    try {
+        await fs.access(lrcFilePath);
+        console.log(`⏭️  跳过: ${path.basename(lrcFilePath)} 已存在`);
+        return;
+    } catch {
+        // 文件不存在，继续处理
+    }
+
+    console.log(`\n📝 检测到新文件: ${fileName}`);
+
+    // 获取语言配置
+    const folderPath = path.dirname(srtFilePath);
+    const languageConfig = getLanguageConfig(folderPath);
+
+    if (!languageConfig) {
+        console.log(`⚠️  跳过: 未找到 ${path.basename(folderPath)} 的语言配置`);
+        return;
+    }
+
+    try {
+        // 等待文件写入完成（避免文件还在写入时就开始处理）
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // 1. SRT -> LRC 转换
+        console.log('🔄 步骤 1/3: 转换 SRT 到 LRC 格式...');
+        const lrcContent = await convertSrtFileToLrc(srtFilePath);
+
+        if (!lrcContent.trim()) {
+            console.log('⚠️  警告: 转换后内容为空，跳过翻译');
+            return;
+        }
+
+        // 2. 调用 API 翻译
+        console.log('🌐 步骤 2/3: 调用 AI 翻译...');
+        const translatedContent = await translateWithOpenRouter(
+            lrcContent,
+            languageConfig.translationPrompt
+        );
+
+        // 3. 保存双语 LRC
+        console.log('💾 步骤 3/3: 保存双语 LRC 文件...');
+        await fs.writeFile(lrcFilePath, translatedContent, 'utf-8');
+
+        console.log(`✅ 完成: ${path.basename(lrcFilePath)}`);
+
+        // 4. 同步文件到目标文件夹
+        await syncFilesToTarget(lrcFilePath, dirName);
+    } catch (error) {
+        console.error(`❌ 错误: ${error}`);
+    }
+}
+
+/**
+ * 主函数 - 启动文件监控
+ */
+async function main() {
+    console.log('🎬 字幕自动翻译工具 - 监控模式\n');
+
+    try {
+        const config = getConfig();
+        console.log(`📂 监控目录: ${config.rootDir}`);
+        console.log(`🤖 模型: ${config.openRouterModel}`);
+        console.log(`👀 监控的语言文件夹: ${config.languageFolders.map(l => l.folderName).join(', ')}\n`);
+        console.log('🚀 开始监控文件变化...\n');
+        console.log('按 Ctrl+C 退出\n');
+
+        // 构建监控路径
+        const watchPaths = config.languageFolders.map(lang =>
+            path.join(config.rootDir, lang.folderName, '**/*.srt')
+        );
+
+        // 创建文件监控器
+        const watcher = chokidar.watch(watchPaths, {
+            persistent: true,
+            ignoreInitial: false, // 启动时处理已存在的文件
+            awaitWriteFinish: {
+                stabilityThreshold: 2000,
+                pollInterval: 100
+            }
+        });
+
+        // 监听新文件添加
+        watcher.on('add', async (filePath) => {
+            if (filePath.toLowerCase().endsWith('.srt')) {
+                await processSrtFile(filePath);
+            }
+        });
+
+        // 监听文件变化（可选）
+        watcher.on('change', async (filePath) => {
+            if (filePath.toLowerCase().endsWith('.srt')) {
+                console.log(`\n🔄 文件已更新: ${path.basename(filePath)}`);
+                // 如果需要，可以删除旧的 LRC 然后重新处理
+                // await processSrtFile(filePath);
+            }
+        });
+
+        // 错误处理
+        watcher.on('error', error => {
+            console.error(`❌ 监控错误: ${error}`);
+        });
+
+    } catch (error) {
+        console.error(`\n❌ 错误: ${error}`);
+        process.exit(1);
+    }
+}
+
+main();

@@ -1,0 +1,28 @@
+{
+  "name": "subtitle-automation",
+  "version": "1.0.0",
+  "description": "自动化字幕翻译工具：SRT -> 双语 LRC",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "watch": "node dist/watcher.js",
+    "translate": "node dist/translate-lrc.js",
+    "dev": "ts-node src/index.ts",
+    "dev:watch": "ts-node src/watcher.ts",
+    "dev:translate": "ts-node src/translate-lrc.ts"
+  },
+  "keywords": ["subtitle", "lrc", "srt", "translation", "openrouter"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "chokidar": "^3.6.0",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "typescript": "^5.4.5",
+    "ts-node": "^10.9.2"
+  }
+}

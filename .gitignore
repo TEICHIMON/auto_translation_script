@@ -1,0 +1,18 @@
+# 依赖
+node_modules/
+
+# 编译输出
+dist/
+
+# 环境变量
+.env
+
+# 系统文件
+.DS_Store
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
