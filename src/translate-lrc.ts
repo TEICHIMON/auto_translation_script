@@ -91,7 +91,7 @@ async function scanAndTranslate(dirPath: string): Promise<Array<{ lrcPath: strin
 
             if (entry.isDirectory()) {
                 // 跳过 output 文件夹
-                if (entry.name === 'output') {
+                if (entry.name.includes('output') ) {
                     continue;
                 }
                 // 递归处理子文件夹

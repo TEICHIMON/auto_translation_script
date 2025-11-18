@@ -14,7 +14,11 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
     const baseName = fileName.replace(/\.srt$/i, '');
     const dirName = path.dirname(srtFilePath);
     const outputDir = path.join(dirName, 'output');
-    const lrcFilePath = path.join(outputDir, `${baseName}.lrc`);
+
+    // 单语 LRC 路径（与 SRT 同级）
+    const monoLrcPath = path.join(dirName, `${baseName}.lrc`);
+    // 双语 LRC 路径（在 output 文件夹中）
+    const bilingualLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
     // 确保 output 文件夹存在
     try {
@@ -24,10 +28,10 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
         return;
     }
 
-    // 检查 LRC 文件是否已存在
+    // 检查双语 LRC 文件是否已存在
     try {
-        await fs.access(lrcFilePath);
-        console.log(`⏭️  跳过: ${path.basename(lrcFilePath)} 已存在`);
+        await fs.access(bilingualLrcPath);
+        console.log(`⏭️  跳过: ${path.basename(bilingualLrcPath)} 已存在`);
         return;
     } catch {
         // 文件不存在，继续处理
@@ -48,30 +52,42 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
         // 等待文件写入完成（避免文件还在写入时就开始处理）
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // 1. SRT -> LRC 转换
-        console.log('🔄 步骤 1/3: 转换 SRT 到 LRC 格式...');
-        const lrcContent = await convertSrtFileToLrc(srtFilePath);
+        let lrcContent: string;
 
-        if (!lrcContent.trim()) {
-            console.log('⚠️  警告: 转换后内容为空，跳过翻译');
-            return;
+        // 步骤 1: SRT -> 单语 LRC
+        try {
+            await fs.access(monoLrcPath);
+            console.log('📖 步骤 1/3: 单语 LRC 已存在，跳过转换');
+            lrcContent = await fs.readFile(monoLrcPath, 'utf-8');
+        } catch {
+            console.log('🔄 步骤 1/3: 转换 SRT 到单语 LRC 格式...');
+            lrcContent = await convertSrtFileToLrc(srtFilePath);
+
+            if (!lrcContent.trim()) {
+                console.log('⚠️  警告: 转换后内容为空，跳过翻译');
+                return;
+            }
+
+            // 保存单语 LRC
+            await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
+            console.log(`💾 已保存单语 LRC: ${path.basename(monoLrcPath)}`);
         }
 
-        // 2. 调用 API 翻译
+        // 步骤 2: 调用 API 翻译
         console.log('🌐 步骤 2/3: 调用 AI 翻译...');
         const translatedContent = await translateWithOpenRouter(
             lrcContent,
             languageConfig.translationPrompt
         );
 
-        // 3. 保存双语 LRC
+        // 步骤 3: 保存双语 LRC
         console.log('💾 步骤 3/3: 保存双语 LRC 文件...');
-        await fs.writeFile(lrcFilePath, translatedContent, 'utf-8');
+        await fs.writeFile(bilingualLrcPath, translatedContent, 'utf-8');
 
-        console.log(`✅ 完成: ${path.basename(lrcFilePath)}`);
+        console.log(`✅ 完成: ${path.basename(bilingualLrcPath)}`);
 
         // 4. 同步文件到目标文件夹
-        await syncFilesToTarget(lrcFilePath, dirName);
+        await syncFilesToTarget(bilingualLrcPath, dirName);
     } catch (error) {
         console.error(`❌ 错误: ${error}`);
     }

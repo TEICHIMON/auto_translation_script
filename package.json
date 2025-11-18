@@ -9,10 +9,12 @@
     "watch": "node dist/watcher.js",
     "translate": "node dist/translate-lrc.js",
     "sync": "node dist/sync-only.js",
+    "convert": "node dist/convert-only.js",
     "dev": "ts-node src/index.ts",
     "dev:watch": "ts-node src/watcher.ts",
     "dev:translate": "ts-node src/translate-lrc.ts",
-    "dev:sync": "ts-node src/sync-only.ts"
+    "dev:sync": "ts-node src/sync-only.ts",
+    "dev:convert": "ts-node src/convert-only.ts"
   },
   "keywords": ["subtitle", "lrc", "srt", "translation", "openai"],
   "author": "",
