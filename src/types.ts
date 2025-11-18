@@ -6,6 +6,8 @@ export interface LRCLine {
 export interface SubtitleConfig {
     rootDir: string;
     languageFolders: LanguageConfig[];
+    openaiApiKey: string;
+    openaiModel: string;
     openRouterApiKey: string;
     openRouterModel: string;
     syncDir: string;
