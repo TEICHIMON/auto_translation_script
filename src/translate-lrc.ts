@@ -2,12 +2,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import { getConfig, getLanguageConfig } from './config';
 import { translateWithOpenRouter } from './translator';
-import { syncFilesToTarget } from './sync';
+import { batchSyncFiles } from './sync';  // ← 改用 batchSyncFiles
 
 /**
  * 处理单个 LRC 文件 - 直接翻译模式
+ * @returns 成功则返回 { lrcPath, audioBasePath }，失败则返回 null
  */
-async function translateLrcFile(lrcFilePath: string): Promise<void> {
+async function translateLrcFile(lrcFilePath: string): Promise<{ lrcPath: string; audioBasePath: string } | null> {
     const fileName = path.basename(lrcFilePath);
     const baseName = fileName.replace(/\.lrc$/i, '');
     const dirName = path.dirname(lrcFilePath);
@@ -19,14 +20,14 @@ async function translateLrcFile(lrcFilePath: string): Promise<void> {
         await fs.mkdir(outputDir, { recursive: true });
     } catch (error) {
         console.error(`创建 output 文件夹失败: ${error}`);
-        return;
+        return null;
     }
 
     // 检查翻译文件是否已存在
     try {
         await fs.access(translatedLrcPath);
         console.log(`⏭️  跳过: ${path.basename(translatedLrcPath)} 已存在`);
-        return;
+        return null;
     } catch {
         // 文件不存在，继续处理
     }
@@ -38,7 +39,7 @@ async function translateLrcFile(lrcFilePath: string): Promise<void> {
 
     if (!languageConfig) {
         console.log(`⚠️  跳过: 未找到 ${path.basename(dirName)} 的语言配置`);
-        return;
+        return null;
     }
 
     try {
@@ -48,7 +49,7 @@ async function translateLrcFile(lrcFilePath: string): Promise<void> {
 
         if (!lrcContent.trim()) {
             console.log('⚠️  警告: LRC 文件内容为空，跳过翻译');
-            return;
+            return null;
         }
 
         // 2. 调用 API 翻译
@@ -64,17 +65,24 @@ async function translateLrcFile(lrcFilePath: string): Promise<void> {
 
         console.log(`✅ 完成: ${path.basename(translatedLrcPath)}`);
 
-        // 4. 同步文件到目标文件夹
-        await syncFilesToTarget(translatedLrcPath, dirName);
+        // 返回文件信息用于批量同步
+        return {
+            lrcPath: translatedLrcPath,
+            audioBasePath: dirName
+        };
     } catch (error) {
         console.error(`❌ 错误: ${error}`);
+        return null;
     }
 }
 
 /**
  * 扫描文件夹并翻译所有 LRC 文件
+ * @returns 成功处理的文件列表
  */
-async function scanAndTranslate(dirPath: string): Promise<void> {
+async function scanAndTranslate(dirPath: string): Promise<Array<{ lrcPath: string; audioBasePath: string }>> {
+    const processedFiles: Array<{ lrcPath: string; audioBasePath: string }> = [];
+
     try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
@@ -87,15 +95,21 @@ async function scanAndTranslate(dirPath: string): Promise<void> {
                     continue;
                 }
                 // 递归处理子文件夹
-                await scanAndTranslate(fullPath);
+                const subResults = await scanAndTranslate(fullPath);
+                processedFiles.push(...subResults);
             } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
                 // 翻译 LRC 文件
-                await translateLrcFile(fullPath);
+                const result = await translateLrcFile(fullPath);
+                if (result) {
+                    processedFiles.push(result);
+                }
             }
         }
     } catch (error) {
         console.error(`扫描文件夹失败 ${dirPath}: ${error}`);
     }
+
+    return processedFiles;
 }
 
 /**
@@ -107,12 +121,17 @@ async function main() {
     try {
         const config = getConfig();
         console.log(`📂 根目录: ${config.rootDir}`);
-        console.log(`🤖 模型: ${config.openRouterModel}\n`);
+        console.log(`🤖 模型: ${config.openaiModel}\n`);
         console.log('开始扫描 LRC 文件...\n');
 
-        await scanAndTranslate(config.rootDir);
+        const processedFiles = await scanAndTranslate(config.rootDir);
 
         console.log('\n🎉 所有翻译任务完成！');
+
+        // 批量同步文件
+        if (processedFiles.length > 0 && config.syncDir) {
+            await batchSyncFiles(processedFiles);
+        }
     } catch (error) {
         console.error(`\n❌ 错误: ${error}`);
         process.exit(1);

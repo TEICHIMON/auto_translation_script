@@ -39,10 +39,13 @@ async function findAudioFile(basePath: string, baseName: string): Promise<string
 
 /**
  * 同步文件到目标文件夹
+ * 注意: 此函数不再单独创建时间戳文件夹，而是使用批量同步时创建的统一文件夹
  * @param lrcFilePath 双语 LRC 文件路径
  * @param audioBasePath 音频文件所在目录（语言文件夹，不是 output）
  */
 export async function syncFilesToTarget(lrcFilePath: string, audioBasePath: string): Promise<void> {
+    // 这个函数在 watcher 模式下会被单独调用
+    // 为了保持兼容性，我们在这里也创建时间戳文件夹
     const config = getConfig();
 
     // 如果未配置同步目录，跳过同步
@@ -91,7 +94,7 @@ export async function syncFilesToTarget(lrcFilePath: string, audioBasePath: stri
 }
 
 /**
- * 批量同步多个文件
+ * 批量同步多个文件到同一个时间戳文件夹
  */
 export async function batchSyncFiles(files: Array<{ lrcPath: string; audioBasePath: string }>): Promise<void> {
     const config = getConfig();
@@ -102,7 +105,7 @@ export async function batchSyncFiles(files: Array<{ lrcPath: string; audioBasePa
 
     console.log(`\n📦 开始批量同步 ${files.length} 个文件...`);
 
-    // 生成统一的时间戳文件夹
+    // 生成统一的时间戳文件夹（整个批次使用同一个文件夹）
     const timestampFolder = generateTimestampFolder();
     const targetDir = path.join(config.syncDir, timestampFolder);
 
@@ -128,7 +131,7 @@ export async function batchSyncFiles(files: Array<{ lrcPath: string; audioBasePa
                     continue;
                 }
 
-                // 复制文件
+                // 复制文件到统一的时间戳文件夹
                 const audioFileName = path.basename(audioFilePath);
                 const targetAudioPath = path.join(targetDir, audioFileName);
                 const targetLrcPath = path.join(targetDir, lrcFileName);

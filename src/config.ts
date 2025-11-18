@@ -28,6 +28,8 @@ const LANGUAGE_CONFIGS: LanguageConfig[] = [
 
 export function getConfig(): SubtitleConfig {
     const rootDir = process.env.ROOT_DIR || '';
+    const openaiApiKey = process.env.OPENAI_API_KEY || '';
+    const openaiModel = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
     const openRouterModel = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free';
     const syncDir = process.env.SYNC_DIR || '';
@@ -36,13 +38,15 @@ export function getConfig(): SubtitleConfig {
         throw new Error('请在 .env 文件中设置 ROOT_DIR（音频根目录路径）');
     }
 
-    if (!openRouterApiKey) {
-        throw new Error('请在 .env 文件中设置 OPENROUTER_API_KEY');
+    if (!openaiApiKey) {
+        throw new Error('请在 .env 文件中设置 OPENAI_API_KEY');
     }
 
     return {
         rootDir,
         languageFolders: LANGUAGE_CONFIGS,
+        openaiApiKey,
+        openaiModel,
         openRouterApiKey,
         openRouterModel,
         syncDir
