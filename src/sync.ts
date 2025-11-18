@@ -6,7 +6,7 @@ import { getConfig } from './config';
  * 生成时间戳文件夹名称
  * 格式: YYYY-MM-DD_HH-MM-SS
  */
-function generateTimestampFolder(): string {
+export function generateTimestampFolder(): string {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
