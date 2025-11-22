@@ -54,6 +54,23 @@ async function findTranslatedFiles(dirPath: string): Promise<Array<{ lrcPath: st
  */
 async function main() {
     console.log('🎬 字幕同步工具 - 仅同步模式\n');
+    // --- 添加日志时间戳功能 ---
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    function getTimestamp() {
+        // 获取当前时间，格式如: 2025/11/21 01:00:05
+        return new Date().toLocaleString('zh-CN', { hour12: false });
+    }
+
+    console.log = (...args: any[]) => {
+        originalLog(`[${getTimestamp()}]`, ...args);
+    };
+
+    console.error = (...args: any[]) => {
+        originalError(`[${getTimestamp()}]`, ...args);
+    };
+// -----------------------
 
     try {
         const config = getConfig();
