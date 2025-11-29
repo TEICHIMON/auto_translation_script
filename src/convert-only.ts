@@ -83,7 +83,6 @@ async function scanAndConvert(dirPath: string): Promise<number> {
  * 主函数
  */
 async function main() {
-    console.log('🎬 字幕转换工具 - 仅转换模式 (SRT → 单语 LRC)\n');
     // --- 添加日志时间戳功能 ---
     const originalLog = console.log;
     const originalError = console.error;
@@ -101,6 +100,8 @@ async function main() {
         originalError(`[${getTimestamp()}]`, ...args);
     };
 // -----------------------
+    console.log('🎬 字幕转换工具 - 仅转换模式 (SRT → 单语 LRC)\n');
+
 
     try {
         const config = getConfig();
