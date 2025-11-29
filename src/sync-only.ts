@@ -53,7 +53,6 @@ async function findTranslatedFiles(dirPath: string): Promise<Array<{ lrcPath: st
  * 主函数 - 仅同步已翻译的文件
  */
 async function main() {
-    console.log('🎬 字幕同步工具 - 仅同步模式\n');
     // --- 添加日志时间戳功能 ---
     const originalLog = console.log;
     const originalError = console.error;
@@ -71,6 +70,8 @@ async function main() {
         originalError(`[${getTimestamp()}]`, ...args);
     };
 // -----------------------
+    console.log('🎬 字幕同步工具 - 仅同步模式\n');
+
 
     try {
         const config = getConfig();

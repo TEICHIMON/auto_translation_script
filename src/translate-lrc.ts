@@ -116,7 +116,6 @@ async function scanAndTranslate(dirPath: string): Promise<Array<{ lrcPath: strin
  * 主函数
  */
 async function main() {
-    console.log('🎬 字幕翻译工具 - LRC 直接翻译模式\n');
     // --- 添加日志时间戳功能 ---
     const originalLog = console.log;
     const originalError = console.error;
@@ -134,6 +133,8 @@ async function main() {
         originalError(`[${getTimestamp()}]`, ...args);
     };
 // -----------------------
+    console.log('🎬 字幕翻译工具 - LRC 直接翻译模式\n');
+
 
     try {
         const config = getConfig();

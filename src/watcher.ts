@@ -97,13 +97,12 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
  * 主函数 - 启动文件监控
  */
 async function main() {
-    console.log('🎬 字幕自动翻译工具 - 监控模式\n');
-    // --- 添加日志时间戳功能 ---
+
+    // ============ 时间戳设置 - 必须在第一行! ============
     const originalLog = console.log;
     const originalError = console.error;
 
-    function getTimestamp() {
-        // 获取当前时间，格式如: 2025/11/21 01:00:05
+    function getTimestamp(): string {
         return new Date().toLocaleString('zh-CN', { hour12: false });
     }
 
@@ -114,9 +113,11 @@ async function main() {
     console.error = (...args: any[]) => {
         originalError(`[${getTimestamp()}]`, ...args);
     };
-// -----------------------
+    // ===================================================
+    console.log('🎬 字幕自动翻译工具 - 监控模式\n');
 
     try {
+
         const config = getConfig();
         console.log(`📂 监控目录: ${config.rootDir}`);
         console.log(`🤖 模型: ${config.openRouterModel}`);
