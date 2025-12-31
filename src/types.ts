@@ -6,11 +6,16 @@ export interface LRCLine {
 export interface SubtitleConfig {
     rootDir: string;
     languageFolders: LanguageConfig[];
-    openaiApiKey: string;
-    openaiModel: string;
-    openRouterApiKey: string;
-    openRouterModel: string;
     syncDir: string;
+    // 统一的模型配置
+    currentModel: string;
+    // 各 API 配置
+    openaiApiKey: string;
+    openaiApiUrl: string;
+    claudeApiKey: string;
+    claudeApiUrl: string;
+    openRouterApiKey: string;
+    openRouterApiUrl: string;
 }
 
 export interface LanguageConfig {
@@ -28,3 +33,6 @@ export interface TranslationRequest {
 export interface TranslationResponse {
     translatedContent: string;
 }
+
+// API 类型枚举
+export type ApiProvider = 'openai' | 'claude' | 'openrouter';

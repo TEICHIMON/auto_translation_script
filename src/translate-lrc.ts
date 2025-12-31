@@ -139,7 +139,7 @@ async function main() {
     try {
         const config = getConfig();
         console.log(`📂 根目录: ${config.rootDir}`);
-        console.log(`🤖 模型: ${config.openaiModel}\n`);
+        console.log(`🤖 模型: ${config.currentModel}\n`);
         console.log('开始扫描 LRC 文件...\n');
 
         const processedFiles = await scanAndTranslate(config.rootDir);
