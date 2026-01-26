@@ -45,7 +45,7 @@ async function callClaude(
         apiUrl,
         {
             model: model,
-            max_tokens: 8192,
+            max_tokens: 50000,
             messages: [
                 {
                     role: 'user',
