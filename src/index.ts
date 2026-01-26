@@ -150,7 +150,7 @@ async function main() {
     try {
         const config = getConfig();
         console.log(`📂 根目录: ${config.rootDir}`);
-        console.log(`🤖 模型: ${config.openRouterModel}`);
+        console.log(`🤖 模型: ${config.currentModel}`);
         if (config.syncDir) {
             console.log(`📦 同步目录: ${config.syncDir}`);
         }

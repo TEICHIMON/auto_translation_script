@@ -120,7 +120,7 @@ async function main() {
 
         const config = getConfig();
         console.log(`📂 监控目录: ${config.rootDir}`);
-        console.log(`🤖 模型: ${config.openRouterModel}`);
+        console.log(`🤖 模型: ${config.currentModel}`);
         console.log(`👀 监控的语言文件夹: ${config.languageFolders.map(l => l.folderName).join(', ')}\n`);
         console.log('🚀 开始监控文件变化...\n');
         console.log('按 Ctrl+C 退出\n');
