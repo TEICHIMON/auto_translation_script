@@ -119,7 +119,60 @@ export function getConfig(): SubtitleConfig {
     };
 }
 
+/**
+ * 根据文件夹名获取语言配置（旧方法，保留兼容性）
+ */
 export function getLanguageConfig(folderPath: string): LanguageConfig | null {
     const folderName = path.basename(folderPath);
     return LANGUAGE_CONFIGS.find(config => config.folderName === folderName) || null;
+}
+
+/**
+ * 从完整文件路径中提取语言配置和语言根目录
+ * 支持子文件夹结构，例如：English/podcast/ep01.srt
+ *
+ * @param filePath 文件的完整路径
+ * @returns { config: 语言配置, languageRoot: 语言文件夹的完整路径 } 或 null
+ */
+export function getLanguageConfigFromPath(filePath: string): { config: LanguageConfig; languageRoot: string } | null {
+    // 标准化路径分隔符
+    const normalizedPath = filePath.replace(/\\/g, '/');
+
+    for (const langConfig of LANGUAGE_CONFIGS) {
+        // 匹配路径中的语言文件夹（确保是完整的文件夹名，不是部分匹配）
+        const pattern = new RegExp(`(.*[/])?(${langConfig.folderName})(/|$)`);
+        const match = normalizedPath.match(pattern);
+
+        if (match) {
+            // 计算语言文件夹的完整路径
+            const prefix = match[1] || '';
+            const languageRoot = path.join(prefix, langConfig.folderName).replace(/\/$/, '');
+
+            return {
+                config: langConfig,
+                languageRoot: languageRoot
+            };
+        }
+    }
+
+    return null;
+}
+
+/**
+ * 计算文件相对于语言文件夹的相对路径
+ * 例如：filePath = /root/English/podcast/ep01.srt, languageRoot = /root/English
+ * 返回：podcast/ep01.srt
+ *
+ * @param filePath 文件的完整路径
+ * @param languageRoot 语言文件夹的完整路径
+ * @returns 相对路径
+ */
+export function getRelativePathFromLanguageRoot(filePath: string, languageRoot: string): string {
+    const normalizedFilePath = path.normalize(filePath);
+    const normalizedLanguageRoot = path.normalize(languageRoot);
+
+    // 获取相对路径
+    const relativePath = path.relative(normalizedLanguageRoot, normalizedFilePath);
+
+    return relativePath;
 }

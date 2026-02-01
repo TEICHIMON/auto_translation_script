@@ -1,7 +1,7 @@
 import chokidar from 'chokidar';
 import fs from 'fs/promises';
 import path from 'path';
-import { getConfig, getLanguageConfig } from './config';
+import { getConfig, getLanguageConfigFromPath, getRelativePathFromLanguageRoot } from './config';
 import { convertSrtFileToLrc } from './converter';
 import { translateWithOpenRouter } from './translator';
 import { syncFilesToTarget } from './sync';
@@ -13,11 +13,29 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
     const fileName = path.basename(srtFilePath);
     const baseName = fileName.replace(/\.srt$/i, '');
     const dirName = path.dirname(srtFilePath);
-    const outputDir = path.join(dirName, 'output');
+
+    // 获取语言配置（支持子文件夹）
+    const langInfo = getLanguageConfigFromPath(srtFilePath);
+
+    if (!langInfo) {
+        console.log(`⚠️  跳过: ${srtFilePath} 不在已配置的语言文件夹中`);
+        return;
+    }
+
+    const { config: languageConfig, languageRoot } = langInfo;
+
+    // 计算相对于语言文件夹的路径
+    const relativeFilePath = getRelativePathFromLanguageRoot(srtFilePath, languageRoot);
+    const relativeDir = path.dirname(relativeFilePath);
+
+    // 输出目录：语言文件夹/output/子路径
+    const outputDir = relativeDir === '.'
+        ? path.join(languageRoot, 'output')
+        : path.join(languageRoot, 'output', relativeDir);
 
     // 单语 LRC 路径（与 SRT 同级）
     const monoLrcPath = path.join(dirName, `${baseName}.lrc`);
-    // 双语 LRC 路径（在 output 文件夹中）
+    // 双语 LRC 路径（在 output 文件夹中，保留子路径结构）
     const bilingualLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
     // 确保 output 文件夹存在
@@ -31,22 +49,15 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
     // 检查双语 LRC 文件是否已存在
     try {
         await fs.access(bilingualLrcPath);
-        console.log(`⏭️  跳过: ${path.basename(bilingualLrcPath)} 已存在`);
+        console.log(`⏭️  跳过: ${path.relative(languageRoot, bilingualLrcPath)} 已存在`);
         return;
     } catch {
         // 文件不存在，继续处理
     }
 
-    console.log(`\n📝 检测到新文件: ${fileName}`);
-
-    // 获取语言配置
-    const folderPath = path.dirname(srtFilePath);
-    const languageConfig = getLanguageConfig(folderPath);
-
-    if (!languageConfig) {
-        console.log(`⚠️  跳过: 未找到 ${path.basename(folderPath)} 的语言配置`);
-        return;
-    }
+    // 显示相对路径，更清晰
+    const displayPath = path.relative(languageRoot, srtFilePath);
+    console.log(`\n📝 检测到新文件: ${languageConfig.folderName}/${displayPath}`);
 
     try {
         // 等待文件写入完成（避免文件还在写入时就开始处理）
@@ -70,7 +81,7 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
 
             // 保存单语 LRC
             await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
-            console.log(`💾 已保存单语 LRC: ${path.basename(monoLrcPath)}`);
+            console.log(`💾 已保存单语 LRC: ${baseName}.lrc`);
         }
 
         // 步骤 2: 调用 API 翻译
@@ -84,10 +95,16 @@ async function processSrtFile(srtFilePath: string): Promise<void> {
         console.log('💾 步骤 3/3: 保存双语 LRC 文件...');
         await fs.writeFile(bilingualLrcPath, translatedContent, 'utf-8');
 
-        console.log(`✅ 完成: ${path.basename(bilingualLrcPath)}`);
+        const outputDisplayPath = path.relative(languageRoot, bilingualLrcPath);
+        console.log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
-        // 4. 同步文件到目标文件夹
-        await syncFilesToTarget(bilingualLrcPath, dirName);
+        // 4. 同步文件到目标文件夹（传递文件夹结构信息）
+        await syncFilesToTarget(
+            bilingualLrcPath,
+            dirName,
+            languageConfig.folderName,
+            relativeDir === '.' ? '' : relativeDir
+        );
     } catch (error) {
         console.error(`❌ 错误: ${error}`);
     }
@@ -125,7 +142,7 @@ async function main() {
         console.log('🚀 开始监控文件变化...\n');
         console.log('按 Ctrl+C 退出\n');
 
-        // 构建监控路径
+        // 构建监控路径 - 使用 ** 匹配所有子文件夹
         const watchPaths = config.languageFolders.map(lang =>
             path.join(config.rootDir, lang.folderName, '**/*.srt')
         );
@@ -137,7 +154,9 @@ async function main() {
             awaitWriteFinish: {
                 stabilityThreshold: 2000,
                 pollInterval: 100
-            }
+            },
+            // 忽略 output 文件夹
+            ignored: /[/\\]output[/\\]/
         });
 
         // 监听新文件添加

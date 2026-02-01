@@ -1,13 +1,24 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getConfig } from './config';
+import { getConfig, getLanguageConfigFromPath, getRelativePathFromLanguageRoot } from './config';
 import { batchSyncFiles } from './sync';
 
 /**
  * 查找已翻译的 LRC 文件和对应的音频文件
+ * 支持子文件夹结构
  */
-async function findTranslatedFiles(dirPath: string): Promise<Array<{ lrcPath: string; audioBasePath: string }>> {
-    const files: Array<{ lrcPath: string; audioBasePath: string }> = [];
+async function findTranslatedFiles(dirPath: string, languageRoot?: string, languageFolder?: string): Promise<Array<{
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}>> {
+    const files: Array<{
+        lrcPath: string;
+        audioBasePath: string;
+        languageFolder: string;
+        relativePath: string;
+    }> = [];
 
     try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -16,34 +27,80 @@ async function findTranslatedFiles(dirPath: string): Promise<Array<{ lrcPath: st
             const fullPath = path.join(dirPath, entry.name);
 
             if (entry.isDirectory()) {
-                // 检查是否是 output 文件夹
-                if (entry.name === 'output') {
-                    // 扫描 output 文件夹中的 LRC 文件
-                    try {
-                        const outputEntries = await fs.readdir(fullPath, { withFileTypes: true });
-                        const audioBasePath = path.dirname(fullPath); // 父文件夹（语言文件夹）
+                // 检查是否是语言文件夹
+                const langInfo = getLanguageConfigFromPath(fullPath);
 
-                        for (const outputEntry of outputEntries) {
-                            if (outputEntry.isFile() && outputEntry.name.toLowerCase().endsWith('.lrc')) {
-                                const lrcPath = path.join(fullPath, outputEntry.name);
-                                files.push({
-                                    lrcPath,
-                                    audioBasePath
-                                });
-                            }
-                        }
-                    } catch (error) {
-                        console.error(`扫描 output 文件夹失败 ${fullPath}: ${error}`);
-                    }
+                if (entry.name === 'output' && languageRoot) {
+                    // 扫描 output 文件夹中的 LRC 文件（包括子文件夹）
+                    const outputFiles = await scanOutputFolder(fullPath, languageRoot, languageFolder || '');
+                    files.push(...outputFiles);
+                } else if (langInfo && !languageRoot) {
+                    // 进入语言文件夹
+                    const subFiles = await findTranslatedFiles(fullPath, langInfo.languageRoot, langInfo.config.folderName);
+                    files.push(...subFiles);
                 } else {
                     // 递归扫描子文件夹
-                    const subFiles = await findTranslatedFiles(fullPath);
+                    const subFiles = await findTranslatedFiles(fullPath, languageRoot, languageFolder);
                     files.push(...subFiles);
                 }
             }
         }
     } catch (error) {
         console.error(`扫描文件夹失败 ${dirPath}: ${error}`);
+    }
+
+    return files;
+}
+
+/**
+ * 扫描 output 文件夹，支持子文件夹结构
+ */
+async function scanOutputFolder(outputPath: string, languageRoot: string, languageFolder: string): Promise<Array<{
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}>> {
+    const files: Array<{
+        lrcPath: string;
+        audioBasePath: string;
+        languageFolder: string;
+        relativePath: string;
+    }> = [];
+
+    try {
+        const entries = await fs.readdir(outputPath, { withFileTypes: true });
+
+        for (const entry of entries) {
+            const fullPath = path.join(outputPath, entry.name);
+
+            if (entry.isDirectory()) {
+                // 递归扫描子文件夹
+                const subFiles = await scanOutputFolder(fullPath, languageRoot, languageFolder);
+                files.push(...subFiles);
+            } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
+                // 计算相对路径
+                // outputPath 类似 /root/English/output 或 /root/English/output/podcast
+                // 我们需要得到相对于 output 的路径
+                const outputRoot = path.join(languageRoot, 'output');
+                const relativeToOutput = path.relative(outputRoot, outputPath);
+                const relativePath = relativeToOutput === '.' ? '' : relativeToOutput;
+
+                // 音频文件的基础路径
+                const audioBasePath = relativePath
+                    ? path.join(languageRoot, relativePath)
+                    : languageRoot;
+
+                files.push({
+                    lrcPath: fullPath,
+                    audioBasePath,
+                    languageFolder,
+                    relativePath
+                });
+            }
+        }
+    } catch (error) {
+        console.error(`扫描 output 文件夹失败 ${outputPath}: ${error}`);
     }
 
     return files;
