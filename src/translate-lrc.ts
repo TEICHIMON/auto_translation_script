@@ -1,18 +1,42 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getConfig, getLanguageConfig } from './config';
+import { getConfig, getLanguageConfigFromPath, getRelativePathFromLanguageRoot } from './config';
 import { translateWithOpenRouter } from './translator';
-import { batchSyncFiles } from './sync';  // ← 改用 batchSyncFiles
+import { batchSyncFiles } from './sync';
 
 /**
  * 处理单个 LRC 文件 - 直接翻译模式
- * @returns 成功则返回 { lrcPath, audioBasePath }，失败则返回 null
+ * @returns 成功则返回 { lrcPath, audioBasePath, languageFolder, relativePath }，失败则返回 null
  */
-async function translateLrcFile(lrcFilePath: string): Promise<{ lrcPath: string; audioBasePath: string } | null> {
+async function translateLrcFile(lrcFilePath: string): Promise<{
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+} | null> {
     const fileName = path.basename(lrcFilePath);
     const baseName = fileName.replace(/\.lrc$/i, '');
     const dirName = path.dirname(lrcFilePath);
-    const outputDir = path.join(dirName, 'output');
+
+    // 获取语言配置（支持子文件夹）
+    const langInfo = getLanguageConfigFromPath(lrcFilePath);
+
+    if (!langInfo) {
+        console.log(`⚠️  跳过: ${lrcFilePath} 不在已配置的语言文件夹中`);
+        return null;
+    }
+
+    const { config: languageConfig, languageRoot } = langInfo;
+
+    // 计算相对于语言文件夹的路径
+    const relativeFilePath = getRelativePathFromLanguageRoot(lrcFilePath, languageRoot);
+    const relativeDir = path.dirname(relativeFilePath);
+
+    // 输出目录：语言文件夹/output/子路径
+    const outputDir = relativeDir === '.'
+        ? path.join(languageRoot, 'output')
+        : path.join(languageRoot, 'output', relativeDir);
+
     const translatedLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
     // 确保 output 文件夹存在
@@ -26,21 +50,15 @@ async function translateLrcFile(lrcFilePath: string): Promise<{ lrcPath: string;
     // 检查翻译文件是否已存在
     try {
         await fs.access(translatedLrcPath);
-        console.log(`⏭️  跳过: ${path.basename(translatedLrcPath)} 已存在`);
+        console.log(`⏭️  跳过: ${path.relative(languageRoot, translatedLrcPath)} 已存在`);
         return null;
     } catch {
         // 文件不存在，继续处理
     }
 
-    console.log(`\n📝 处理: ${fileName}`);
-
-    // 获取语言配置
-    const languageConfig = getLanguageConfig(dirName);
-
-    if (!languageConfig) {
-        console.log(`⚠️  跳过: 未找到 ${path.basename(dirName)} 的语言配置`);
-        return null;
-    }
+    // 显示相对路径，更清晰
+    const displayPath = path.relative(languageRoot, lrcFilePath);
+    console.log(`\n📝 处理: ${languageConfig.folderName}/${displayPath}`);
 
     try {
         // 1. 读取 LRC 内容
@@ -63,12 +81,15 @@ async function translateLrcFile(lrcFilePath: string): Promise<{ lrcPath: string;
         console.log('💾 保存翻译后的 LRC 文件...');
         await fs.writeFile(translatedLrcPath, translatedContent, 'utf-8');
 
-        console.log(`✅ 完成: ${path.basename(translatedLrcPath)}`);
+        const outputDisplayPath = path.relative(languageRoot, translatedLrcPath);
+        console.log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
         // 返回文件信息用于批量同步
         return {
             lrcPath: translatedLrcPath,
-            audioBasePath: dirName
+            audioBasePath: dirName,
+            languageFolder: languageConfig.folderName,
+            relativePath: relativeDir === '.' ? '' : relativeDir
         };
     } catch (error) {
         console.error(`❌ 错误: ${error}`);
@@ -80,8 +101,18 @@ async function translateLrcFile(lrcFilePath: string): Promise<{ lrcPath: string;
  * 扫描文件夹并翻译所有 LRC 文件
  * @returns 成功处理的文件列表
  */
-async function scanAndTranslate(dirPath: string): Promise<Array<{ lrcPath: string; audioBasePath: string }>> {
-    const processedFiles: Array<{ lrcPath: string; audioBasePath: string }> = [];
+async function scanAndTranslate(dirPath: string): Promise<Array<{
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}>> {
+    const processedFiles: Array<{
+        lrcPath: string;
+        audioBasePath: string;
+        languageFolder: string;
+        relativePath: string;
+    }> = [];
 
     try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -91,7 +122,7 @@ async function scanAndTranslate(dirPath: string): Promise<Array<{ lrcPath: strin
 
             if (entry.isDirectory()) {
                 // 跳过 output 文件夹
-                if (entry.name.includes('output') ) {
+                if (entry.name === 'output') {
                     continue;
                 }
                 // 递归处理子文件夹
