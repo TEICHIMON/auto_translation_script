@@ -3,10 +3,10 @@ import path from 'path';
 import { getConfig } from './config';
 
 /**
- * 生成时间戳文件夹名称
+ * 生成时间戳字符串
  * 格式: YYYY-MM-DD_HH-MM-SS
  */
-export function generateTimestampFolder(): string {
+export function generateTimestamp(): string {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -70,14 +70,16 @@ export async function syncFilesToTarget(
             return;
         }
 
-        // 生成时间戳文件夹
-        const timestampFolder = generateTimestampFolder();
+        // 生成时间戳
+        const timestamp = generateTimestamp();
 
-        // 构建目标路径：SYNC_DIR/timestamp/languageFolder/relativePath/
-        let targetDir = path.join(config.syncDir, timestampFolder);
+        // 构建目标路径：SYNC_DIR/timestamp_languageFolder/relativePath/
+        let folderName = timestamp;
         if (languageFolder) {
-            targetDir = path.join(targetDir, languageFolder);
+            folderName = `${timestamp}_${languageFolder}`;
         }
+
+        let targetDir = path.join(config.syncDir, folderName);
         if (relativePath) {
             targetDir = path.join(targetDir, relativePath);
         }
@@ -90,10 +92,8 @@ export async function syncFilesToTarget(
         const targetAudioPath = path.join(targetDir, audioFileName);
         const targetLrcPath = path.join(targetDir, lrcFileName);
 
-        const displayPath = languageFolder
-            ? (relativePath ? `${languageFolder}/${relativePath}` : languageFolder)
-            : timestampFolder;
-        console.log(`📦 同步文件到: ${timestampFolder}/${displayPath}/`);
+        const displayPath = relativePath ? `${folderName}/${relativePath}` : folderName;
+        console.log(`📦 同步文件到: ${displayPath}/`);
 
         // 复制音频文件
         await fs.copyFile(audioFilePath, targetAudioPath);
@@ -109,7 +109,7 @@ export async function syncFilesToTarget(
 }
 
 /**
- * 批量同步多个文件到同一个时间戳文件夹，保留文件夹结构
+ * 批量同步多个文件，按语言分开到不同的时间戳文件夹
  */
 export async function batchSyncFiles(files: Array<{
     lrcPath: string;
@@ -125,71 +125,82 @@ export async function batchSyncFiles(files: Array<{
 
     console.log(`\n📦 开始批量同步 ${files.length} 个文件...`);
 
-    // 生成统一的时间戳文件夹（整个批次使用同一个文件夹）
-    const timestampFolder = generateTimestampFolder();
-    const baseTargetDir = path.join(config.syncDir, timestampFolder);
+    // 生成统一的时间戳（整个批次使用同一个时间戳）
+    const timestamp = generateTimestamp();
 
-    try {
-        // 创建基础目标文件夹
-        await fs.mkdir(baseTargetDir, { recursive: true });
-        console.log(`📁 创建同步目录: ${timestampFolder}/`);
-
-        let successCount = 0;
-        let failCount = 0;
-
-        for (const file of files) {
-            try {
-                const lrcFileName = path.basename(file.lrcPath);
-                const baseName = lrcFileName.replace(/\.lrc$/i, '');
-
-                // 查找音频文件
-                const audioFilePath = await findAudioFile(file.audioBasePath, baseName);
-
-                if (!audioFilePath) {
-                    console.log(`  ⚠️  跳过: ${baseName}.* (未找到音频)`);
-                    failCount++;
-                    continue;
-                }
-
-                // 构建目标路径，保留文件夹结构
-                let targetDir = baseTargetDir;
-                if (file.languageFolder) {
-                    targetDir = path.join(targetDir, file.languageFolder);
-                }
-                if (file.relativePath) {
-                    targetDir = path.join(targetDir, file.relativePath);
-                }
-
-                // 确保目标目录存在
-                await fs.mkdir(targetDir, { recursive: true });
-
-                // 复制文件
-                const audioFileName = path.basename(audioFilePath);
-                const targetAudioPath = path.join(targetDir, audioFileName);
-                const targetLrcPath = path.join(targetDir, lrcFileName);
-
-                await fs.copyFile(audioFilePath, targetAudioPath);
-                await fs.copyFile(file.lrcPath, targetLrcPath);
-
-                // 显示路径
-                const displayPath = file.languageFolder
-                    ? (file.relativePath
-                        ? `${file.languageFolder}/${file.relativePath}/${baseName}`
-                        : `${file.languageFolder}/${baseName}`)
-                    : baseName;
-                console.log(`  ✅ ${displayPath}`);
-                successCount++;
-
-            } catch (error) {
-                console.error(`  ❌ 失败: ${path.basename(file.lrcPath)} - ${error}`);
-                failCount++;
-            }
+    // 按语言分组
+    const filesByLanguage = new Map<string, typeof files>();
+    for (const file of files) {
+        const lang = file.languageFolder || 'Unknown';
+        if (!filesByLanguage.has(lang)) {
+            filesByLanguage.set(lang, []);
         }
-
-        console.log(`\n🎉 同步完成: ${successCount} 成功, ${failCount} 失败`);
-        console.log(`📂 同步位置: ${baseTargetDir}`);
-
-    } catch (error) {
-        console.error(`❌ 批量同步失败: ${error}`);
+        filesByLanguage.get(lang)!.push(file);
     }
+
+    let totalSuccess = 0;
+    let totalFail = 0;
+
+    // 为每个语言创建独立的文件夹
+    for (const [language, langFiles] of filesByLanguage) {
+        const folderName = `${timestamp}_${language}`;
+        const baseTargetDir = path.join(config.syncDir, folderName);
+
+        try {
+            // 创建语言专属的目标文件夹
+            await fs.mkdir(baseTargetDir, { recursive: true });
+            console.log(`\n📁 创建同步目录: ${folderName}/`);
+
+            for (const file of langFiles) {
+                try {
+                    const lrcFileName = path.basename(file.lrcPath);
+                    const baseName = lrcFileName.replace(/\.lrc$/i, '');
+
+                    // 查找音频文件
+                    const audioFilePath = await findAudioFile(file.audioBasePath, baseName);
+
+                    if (!audioFilePath) {
+                        console.log(`  ⚠️  跳过: ${baseName}.* (未找到音频)`);
+                        totalFail++;
+                        continue;
+                    }
+
+                    // 构建目标路径，保留子文件夹结构
+                    let targetDir = baseTargetDir;
+                    if (file.relativePath) {
+                        targetDir = path.join(targetDir, file.relativePath);
+                    }
+
+                    // 确保目标目录存在
+                    await fs.mkdir(targetDir, { recursive: true });
+
+                    // 复制文件
+                    const audioFileName = path.basename(audioFilePath);
+                    const targetAudioPath = path.join(targetDir, audioFileName);
+                    const targetLrcPath = path.join(targetDir, lrcFileName);
+
+                    await fs.copyFile(audioFilePath, targetAudioPath);
+                    await fs.copyFile(file.lrcPath, targetLrcPath);
+
+                    // 显示路径
+                    const displayPath = file.relativePath
+                        ? `${file.relativePath}/${baseName}`
+                        : baseName;
+                    console.log(`  ✅ ${displayPath}`);
+                    totalSuccess++;
+
+                } catch (error) {
+                    console.error(`  ❌ 失败: ${path.basename(file.lrcPath)} - ${error}`);
+                    totalFail++;
+                }
+            }
+
+        } catch (error) {
+            console.error(`❌ 创建目录失败 ${folderName}: ${error}`);
+            totalFail += langFiles.length;
+        }
+    }
+
+    console.log(`\n🎉 同步完成: ${totalSuccess} 成功, ${totalFail} 失败`);
+    console.log(`📂 同步位置: ${config.syncDir}`);
 }
