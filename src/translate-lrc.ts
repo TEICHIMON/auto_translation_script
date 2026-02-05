@@ -5,6 +5,63 @@ import { translateWithOpenRouter } from './translator';
 import { batchSyncFiles } from './sync';
 
 /**
+ * 获取当前年月，格式: YYYY-MM
+ */
+function getCurrentYearMonth(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+}
+
+/**
+ * 在 output 目录下查找已存在的双语 LRC 文件
+ * 同时检查旧结构和新结构：
+ * - 旧结构：output/xxx.lrc 或 output/subfolder/xxx.lrc
+ * - 新结构：output/YYYY-MM/xxx.lrc 或 output/YYYY-MM/subfolder/xxx.lrc
+ */
+async function findExistingBilingualLrc(
+    outputBaseDir: string,
+    relativePath: string,
+    baseName: string
+): Promise<string | null> {
+    // 1. 先检查旧结构：直接在 output/ 或 output/relativePath/ 下
+    const oldStructureDir = relativePath
+        ? path.join(outputBaseDir, relativePath)
+        : outputBaseDir;
+    const oldStructurePath = path.join(oldStructureDir, `${baseName}.lrc`);
+
+    try {
+        await fs.access(oldStructurePath);
+        return oldStructurePath;
+    } catch {
+        // 旧结构不存在，继续检查新结构
+    }
+
+    // 2. 检查新结构：output/YYYY-MM/ 或 output/YYYY-MM/relativePath/
+    try {
+        const entries = await fs.readdir(outputBaseDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isDirectory() && /^\d{4}-\d{2}$/.test(entry.name)) {
+                const monthDir = path.join(outputBaseDir, entry.name);
+                const targetDir = relativePath ? path.join(monthDir, relativePath) : monthDir;
+                const lrcPath = path.join(targetDir, `${baseName}.lrc`);
+                try {
+                    await fs.access(lrcPath);
+                    return lrcPath;
+                } catch {
+                    // 继续检查下一个月份
+                }
+            }
+        }
+    } catch {
+        // output 目录不存在
+    }
+
+    return null;
+}
+
+/**
  * 处理单个 LRC 文件 - 直接翻译模式
  * @returns 成功则返回 { lrcPath, audioBasePath, languageFolder, relativePath }，失败则返回 null
  */
@@ -31,11 +88,26 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
     // 计算相对于语言文件夹的路径
     const relativeFilePath = getRelativePathFromLanguageRoot(lrcFilePath, languageRoot);
     const relativeDir = path.dirname(relativeFilePath);
+    const relativeDirClean = relativeDir === '.' ? '' : relativeDir;
 
-    // 输出目录：语言文件夹/output/子路径
-    const outputDir = relativeDir === '.'
-        ? path.join(languageRoot, 'output')
-        : path.join(languageRoot, 'output', relativeDir);
+    // output 基础目录
+    const outputBaseDir = path.join(languageRoot, 'output');
+
+    // 检查是否已存在双语 LRC（同时检查旧结构和新结构）
+    const existingLrc = await findExistingBilingualLrc(outputBaseDir, relativeDirClean, baseName);
+    if (existingLrc) {
+        const displayPath = path.relative(languageRoot, existingLrc);
+        console.log(`⏭️  跳过: ${displayPath} 已存在`);
+        return null;
+    }
+
+    // 获取当前年月
+    const yearMonth = getCurrentYearMonth();
+
+    // 输出目录：语言文件夹/output/YYYY-MM/子路径
+    const outputDir = relativeDirClean
+        ? path.join(outputBaseDir, yearMonth, relativeDirClean)
+        : path.join(outputBaseDir, yearMonth);
 
     const translatedLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
@@ -45,15 +117,6 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
     } catch (error) {
         console.error(`创建 output 文件夹失败: ${error}`);
         return null;
-    }
-
-    // 检查翻译文件是否已存在
-    try {
-        await fs.access(translatedLrcPath);
-        console.log(`⏭️  跳过: ${path.relative(languageRoot, translatedLrcPath)} 已存在`);
-        return null;
-    } catch {
-        // 文件不存在，继续处理
     }
 
     // 显示相对路径，更清晰
@@ -89,7 +152,7 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
             lrcPath: translatedLrcPath,
             audioBasePath: dirName,
             languageFolder: languageConfig.folderName,
-            relativePath: relativeDir === '.' ? '' : relativeDir
+            relativePath: relativeDirClean
         };
     } catch (error) {
         console.error(`❌ 错误: ${error}`);
@@ -152,7 +215,6 @@ async function main() {
     const originalError = console.error;
 
     function getTimestamp() {
-        // 获取当前时间，格式如: 2025/11/21 01:00:05
         return new Date().toLocaleString('zh-CN', { hour12: false });
     }
 
@@ -163,9 +225,8 @@ async function main() {
     console.error = (...args: any[]) => {
         originalError(`[${getTimestamp()}]`, ...args);
     };
-// -----------------------
+    // -----------------------
     console.log('🎬 字幕翻译工具 - LRC 直接翻译模式\n');
-
 
     try {
         const config = getConfig();

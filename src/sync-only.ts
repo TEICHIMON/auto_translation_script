@@ -5,7 +5,7 @@ import { batchSyncFiles } from './sync';
 
 /**
  * 查找已翻译的 LRC 文件和对应的音频文件
- * 支持子文件夹结构
+ * 支持新的目录结构：output/YYYY-MM/子文件夹/xxx.lrc
  */
 async function findTranslatedFiles(dirPath: string, languageRoot?: string, languageFolder?: string): Promise<Array<{
     lrcPath: string;
@@ -31,7 +31,7 @@ async function findTranslatedFiles(dirPath: string, languageRoot?: string, langu
                 const langInfo = getLanguageConfigFromPath(fullPath);
 
                 if (entry.name === 'output' && languageRoot) {
-                    // 扫描 output 文件夹中的 LRC 文件（包括子文件夹）
+                    // 扫描 output 文件夹中的 LRC 文件（包括月份子文件夹）
                     const outputFiles = await scanOutputFolder(fullPath, languageRoot, languageFolder || '');
                     files.push(...outputFiles);
                 } else if (langInfo && !languageRoot) {
@@ -53,7 +53,7 @@ async function findTranslatedFiles(dirPath: string, languageRoot?: string, langu
 }
 
 /**
- * 扫描 output 文件夹，支持子文件夹结构
+ * 扫描 output 文件夹，支持新的目录结构：output/YYYY-MM/子文件夹/xxx.lrc
  */
 async function scanOutputFolder(outputPath: string, languageRoot: string, languageFolder: string): Promise<Array<{
     lrcPath: string;
@@ -75,21 +75,112 @@ async function scanOutputFolder(outputPath: string, languageRoot: string, langua
             const fullPath = path.join(outputPath, entry.name);
 
             if (entry.isDirectory()) {
-                // 递归扫描子文件夹
-                const subFiles = await scanOutputFolder(fullPath, languageRoot, languageFolder);
+                // 检查是否是 YYYY-MM 格式的月份文件夹
+                if (/^\d{4}-\d{2}$/.test(entry.name)) {
+                    // 扫描月份文件夹
+                    const monthFiles = await scanMonthFolder(fullPath, languageRoot, languageFolder);
+                    files.push(...monthFiles);
+                } else {
+                    // 兼容旧结构：直接在 output 下的子文件夹
+                    const subFiles = await scanOutputFolder(fullPath, languageRoot, languageFolder);
+                    files.push(...subFiles);
+                }
+            } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
+                // 兼容旧结构：直接在 output 下的 LRC 文件
+                const baseName = entry.name.replace(/\.lrc$/i, '');
+                files.push({
+                    lrcPath: fullPath,
+                    audioBasePath: languageRoot,
+                    languageFolder,
+                    relativePath: ''
+                });
+            }
+        }
+    } catch (error) {
+        console.error(`扫描 output 文件夹失败 ${outputPath}: ${error}`);
+    }
+
+    return files;
+}
+
+/**
+ * 扫描月份文件夹 (output/YYYY-MM/)
+ */
+async function scanMonthFolder(monthPath: string, languageRoot: string, languageFolder: string): Promise<Array<{
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}>> {
+    const files: Array<{
+        lrcPath: string;
+        audioBasePath: string;
+        languageFolder: string;
+        relativePath: string;
+    }> = [];
+
+    try {
+        const entries = await fs.readdir(monthPath, { withFileTypes: true });
+
+        for (const entry of entries) {
+            const fullPath = path.join(monthPath, entry.name);
+
+            if (entry.isDirectory()) {
+                // 递归扫描子文件夹（如 podcast/）
+                const subFiles = await scanMonthSubFolder(fullPath, languageRoot, languageFolder, entry.name);
                 files.push(...subFiles);
             } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
-                // 计算相对路径
-                // outputPath 类似 /root/English/output 或 /root/English/output/podcast
-                // 我们需要得到相对于 output 的路径
-                const outputRoot = path.join(languageRoot, 'output');
-                const relativeToOutput = path.relative(outputRoot, outputPath);
-                const relativePath = relativeToOutput === '.' ? '' : relativeToOutput;
+                // 月份文件夹根目录的 LRC 文件
+                files.push({
+                    lrcPath: fullPath,
+                    audioBasePath: languageRoot,
+                    languageFolder,
+                    relativePath: ''
+                });
+            }
+        }
+    } catch (error) {
+        console.error(`扫描月份文件夹失败 ${monthPath}: ${error}`);
+    }
 
+    return files;
+}
+
+/**
+ * 扫描月份文件夹下的子文件夹 (output/YYYY-MM/podcast/)
+ */
+async function scanMonthSubFolder(
+    subFolderPath: string,
+    languageRoot: string,
+    languageFolder: string,
+    relativePath: string
+): Promise<Array<{
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}>> {
+    const files: Array<{
+        lrcPath: string;
+        audioBasePath: string;
+        languageFolder: string;
+        relativePath: string;
+    }> = [];
+
+    try {
+        const entries = await fs.readdir(subFolderPath, { withFileTypes: true });
+
+        for (const entry of entries) {
+            const fullPath = path.join(subFolderPath, entry.name);
+
+            if (entry.isDirectory()) {
+                // 继续递归
+                const newRelativePath = path.join(relativePath, entry.name);
+                const subFiles = await scanMonthSubFolder(fullPath, languageRoot, languageFolder, newRelativePath);
+                files.push(...subFiles);
+            } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
                 // 音频文件的基础路径
-                const audioBasePath = relativePath
-                    ? path.join(languageRoot, relativePath)
-                    : languageRoot;
+                const audioBasePath = path.join(languageRoot, relativePath);
 
                 files.push({
                     lrcPath: fullPath,
@@ -100,7 +191,7 @@ async function scanOutputFolder(outputPath: string, languageRoot: string, langua
             }
         }
     } catch (error) {
-        console.error(`扫描 output 文件夹失败 ${outputPath}: ${error}`);
+        console.error(`扫描子文件夹失败 ${subFolderPath}: ${error}`);
     }
 
     return files;
