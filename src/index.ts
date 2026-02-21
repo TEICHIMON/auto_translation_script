@@ -4,69 +4,7 @@ import { getConfig, getLanguageConfigFromPath, getRelativePathFromLanguageRoot }
 import { convertSrtFileToLrc } from './converter';
 import { translateWithOpenRouter } from './translator';
 import { batchSyncFiles } from './sync';
-
-/**
- * 获取当前年月，格式: YYYY-MM
- */
-function getCurrentYearMonth(): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `${year}-${month}`;
-}
-
-/**
- * 在 output 目录下查找已存在的双语 LRC 文件
- * 同时检查旧结构和新结构：
- * - 旧结构：output/xxx.lrc 或 output/subfolder/xxx.lrc
- * - 新结构：output/YYYY-MM/xxx.lrc 或 output/YYYY-MM/subfolder/xxx.lrc
- *
- * @param outputBaseDir output 目录路径（如 /root/English/output）
- * @param relativePath 相对路径（如 podcast），空字符串表示根目录
- * @param baseName 文件基础名（如 ep01）
- * @returns 找到的文件路径，或 null
- */
-async function findExistingBilingualLrc(
-    outputBaseDir: string,
-    relativePath: string,
-    baseName: string
-): Promise<string | null> {
-    // 1. 先检查旧结构：直接在 output/ 或 output/relativePath/ 下
-    const oldStructureDir = relativePath
-        ? path.join(outputBaseDir, relativePath)
-        : outputBaseDir;
-    const oldStructurePath = path.join(oldStructureDir, `${baseName}.lrc`);
-
-    try {
-        await fs.access(oldStructurePath);
-        return oldStructurePath;
-    } catch {
-        // 旧结构不存在，继续检查新结构
-    }
-
-    // 2. 检查新结构：output/YYYY-MM/ 或 output/YYYY-MM/relativePath/
-    try {
-        const entries = await fs.readdir(outputBaseDir, { withFileTypes: true });
-        for (const entry of entries) {
-            // 只检查 YYYY-MM 格式的文件夹
-            if (entry.isDirectory() && /^\d{4}-\d{2}$/.test(entry.name)) {
-                const monthDir = path.join(outputBaseDir, entry.name);
-                const targetDir = relativePath ? path.join(monthDir, relativePath) : monthDir;
-                const lrcPath = path.join(targetDir, `${baseName}.lrc`);
-                try {
-                    await fs.access(lrcPath);
-                    return lrcPath;
-                } catch {
-                    // 继续检查下一个月份
-                }
-            }
-        }
-    } catch {
-        // output 目录不存在
-    }
-
-    return null;
-}
+import { getCurrentYearMonth, findExistingBilingualLrc, buildOutputDir } from './utils';
 
 /**
  * 处理单个 SRT 文件
@@ -78,6 +16,7 @@ async function processSrtFile(srtFilePath: string): Promise<{
     languageFolder: string;
     relativePath: string;
 } | null> {
+    console.log(`🔍 DEBUG 扫描到文件: ${srtFilePath}`);
     const fileName = path.basename(srtFilePath);
     const baseName = fileName.replace(/\.srt$/i, '');
     const dirName = path.dirname(srtFilePath);
@@ -100,7 +39,7 @@ async function processSrtFile(srtFilePath: string): Promise<{
     // output 基础目录
     const outputBaseDir = path.join(languageRoot, 'output');
 
-    // 检查是否已存在双语 LRC（同时检查旧结构和新结构）
+    // 检查是否已存在双语 LRC（使用共享的查找函数，包含兜底递归搜索）
     const existingLrc = await findExistingBilingualLrc(outputBaseDir, relativeDirClean, baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
@@ -111,14 +50,12 @@ async function processSrtFile(srtFilePath: string): Promise<{
     // 获取当前年月
     const yearMonth = getCurrentYearMonth();
 
-    // 输出目录：语言文件夹/output/YYYY-MM/子路径
-    const outputDir = relativeDirClean
-        ? path.join(outputBaseDir, yearMonth, relativeDirClean)
-        : path.join(outputBaseDir, yearMonth);
+    // 输出目录（使用 buildOutputDir 避免 YYYY-MM 嵌套）
+    const outputDir = buildOutputDir(outputBaseDir, yearMonth, relativeDirClean);
 
     // 单语 LRC 路径（与 SRT 同级）
     const monoLrcPath = path.join(dirName, `${baseName}.lrc`);
-    // 双语 LRC 路径（在 output/YYYY-MM/ 文件夹中）
+    // 双语 LRC 路径（在 output 文件夹中）
     const bilingualLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
     // 确保 output 文件夹存在
@@ -257,6 +194,7 @@ async function main() {
             console.log(`📦 同步目录: ${config.syncDir}`);
         }
         console.log('\n开始扫描文件夹...\n');
+
 
         const processedFiles = await scanAndProcess(config.rootDir);
 

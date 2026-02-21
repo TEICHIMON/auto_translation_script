@@ -148,7 +148,7 @@ export async function translateWithOpenRouter(
     } catch (error) {
         if (axios.isAxiosError(error)) {
             throw new Error(
-                `${provider.toUpperCase()} API 调用失败: ${error.response?.status} - ${JSON.stringify(error.response?.data)}`
+                `${provider.toUpperCase()} API 调用失败: ${error.response?.status} - ${JSON.stringify(error?.response?.data)}}`
             );
         }
         throw error;
