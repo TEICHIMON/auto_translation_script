@@ -29,16 +29,11 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
 
     const { config: languageConfig, languageRoot } = langInfo;
 
-    // 计算相对于语言文件夹的路径
-    const relativeFilePath = getRelativePathFromLanguageRoot(lrcFilePath, languageRoot);
-    const relativeDir = path.dirname(relativeFilePath);
-    const relativeDirClean = relativeDir === '.' ? '' : relativeDir;
-
     // output 基础目录
     const outputBaseDir = path.join(languageRoot, 'output');
 
-    // 检查是否已存在双语 LRC（使用共享的查找函数，包含兜底递归搜索）
-    const existingLrc = await findExistingBilingualLrc(outputBaseDir, relativeDirClean, baseName);
+    // 检查是否已存在双语 LRC（扁平化搜索，不传 relativePath）
+    const existingLrc = await findExistingBilingualLrc(outputBaseDir, '', baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
         console.log(`⏭️  跳过: ${displayPath} 已存在`);
@@ -48,8 +43,8 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
     // 获取当前年月
     const yearMonth = getCurrentYearMonth();
 
-    // 输出目录（使用 buildOutputDir 避免 YYYY-MM 嵌套）
-    const outputDir = buildOutputDir(outputBaseDir, yearMonth, relativeDirClean);
+    // 输出目录（扁平化，不保留子文件夹层级）
+    const outputDir = buildOutputDir(outputBaseDir, yearMonth, '');
 
     const translatedLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
@@ -89,12 +84,12 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
         const outputDisplayPath = path.relative(languageRoot, translatedLrcPath);
         console.log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
-        // 返回文件信息用于批量同步
+        // 返回文件信息用于批量同步（音频路径仍指向原始目录）
         return {
             lrcPath: translatedLrcPath,
             audioBasePath: dirName,
             languageFolder: languageConfig.folderName,
-            relativePath: relativeDirClean
+            relativePath: ''
         };
     } catch (error) {
         console.error(`❌ 错误: ${error}`);

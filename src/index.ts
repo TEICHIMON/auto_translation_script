@@ -31,7 +31,7 @@ async function processSrtFile(srtFilePath: string): Promise<{
 
     const { config: languageConfig, languageRoot } = langInfo;
 
-    // 计算相对于语言文件夹的路径
+    // 计算相对于语言文件夹的路径（仅用于显示）
     const relativeFilePath = getRelativePathFromLanguageRoot(srtFilePath, languageRoot);
     const relativeDir = path.dirname(relativeFilePath);
     const relativeDirClean = relativeDir === '.' ? '' : relativeDir;
@@ -39,8 +39,8 @@ async function processSrtFile(srtFilePath: string): Promise<{
     // output 基础目录
     const outputBaseDir = path.join(languageRoot, 'output');
 
-    // 检查是否已存在双语 LRC（使用共享的查找函数，包含兜底递归搜索）
-    const existingLrc = await findExistingBilingualLrc(outputBaseDir, relativeDirClean, baseName);
+    // 检查是否已存在双语 LRC（扁平化搜索，不传 relativePath）
+    const existingLrc = await findExistingBilingualLrc(outputBaseDir, '', baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
         console.log(`⏭️  跳过: ${displayPath} 已存在`);
@@ -50,12 +50,12 @@ async function processSrtFile(srtFilePath: string): Promise<{
     // 获取当前年月
     const yearMonth = getCurrentYearMonth();
 
-    // 输出目录（使用 buildOutputDir 避免 YYYY-MM 嵌套）
-    const outputDir = buildOutputDir(outputBaseDir, yearMonth, relativeDirClean);
+    // 输出目录（扁平化，不保留子文件夹层级）
+    const outputDir = buildOutputDir(outputBaseDir, yearMonth, '');
 
     // 单语 LRC 路径（与 SRT 同级）
     const monoLrcPath = path.join(dirName, `${baseName}.lrc`);
-    // 双语 LRC 路径（在 output 文件夹中）
+    // 双语 LRC 路径（在 output 文件夹中，扁平化）
     const bilingualLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
     // 确保 output 文件夹存在
@@ -106,12 +106,12 @@ async function processSrtFile(srtFilePath: string): Promise<{
         const outputDisplayPath = path.relative(languageRoot, bilingualLrcPath);
         console.log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
-        // 返回文件信息用于同步
+        // 返回文件信息用于同步（音频路径仍指向原始目录）
         return {
             lrcPath: bilingualLrcPath,
             audioBasePath: dirName,
             languageFolder: languageConfig.folderName,
-            relativePath: relativeDirClean
+            relativePath: ''
         };
     } catch (error) {
         console.error(`❌ 错误: ${error}`);
