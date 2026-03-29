@@ -62,6 +62,7 @@ export function getApiProvider(modelName: string): ApiProvider {
         lowerModel.includes('google') ||
         lowerModel.includes('gemini') ||
         lowerModel.includes('mistral') ||
+        lowerModel.includes('gpt-oss') ||
         lowerModel.includes('llama')) {
         return 'openrouter';
     }
