@@ -4,6 +4,9 @@ import { SubtitleConfig, LanguageConfig, ApiProvider } from './types';
 
 dotenv.config();
 
+// 双语字幕分隔符（原文与译文之间的分隔符）
+export const DELIMITER = '|||';
+
 // 语言配置
 const LANGUAGE_CONFIGS: LanguageConfig[] = [
     {
@@ -13,17 +16,17 @@ const LANGUAGE_CONFIGS: LanguageConfig[] = [
         translationPrompt: `请为这个字幕添加中文翻译，生成lrc格式的英中字幕
 
 格式要求：
-[时间戳]英文原文-中文翻译
+[时间戳]英文原文${DELIMITER}中文翻译
 
 注意事项：
 1. 英文原文保持原样，包括单词之间的空格
-2. 连字符"-"两侧不要有任何空格
+2. 分隔符"${DELIMITER}"两侧不要有任何空格
 3. 尽可能做到直译，不要意译，保持原文的风格和表达方式
 
 示例：
-[00:20.00]Hello world-你好世界
-[00:24.40]How are you?-你好吗？
-[00:28.15]I'm fine, thank you-我很好，谢谢`
+[00:20.00]Hello world${DELIMITER}你好世界
+[00:24.40]How are you?${DELIMITER}你好吗？
+[00:28.15]I'm fine, thank you${DELIMITER}我很好，谢谢`
     },
     {
         folderName: 'Japanese',
@@ -32,17 +35,17 @@ const LANGUAGE_CONFIGS: LanguageConfig[] = [
         translationPrompt: `请为这个字幕添加中文翻译，生成lrc格式的日中字幕
 
 格式要求：
-[时间戳]日文原文-中文翻译
+[时间戳]日文原文${DELIMITER}中文翻译
 
 注意事项：
 1. 日文原文保持原样
-2. 连字符"-"两侧不要有任何空格
+2. 分隔符"${DELIMITER}"两侧不要有任何空格
 3. 尽可能做到直译，不要意译，保持原文的风格和表达方式
 
 示例：
-[00:20.00]こんにちは-你好
-[00:24.40]元気ですか？-你好吗？
-[00:28.15]ありがとう-谢谢`
+[00:20.00]こんにちは${DELIMITER}你好
+[00:24.40]元気ですか？${DELIMITER}你好吗？
+[00:28.15]ありがとう${DELIMITER}谢谢`
     }
 ];
 
