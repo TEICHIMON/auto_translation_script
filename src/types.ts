@@ -16,6 +16,9 @@ export interface SubtitleConfig {
     claudeApiUrl: string;
     openRouterApiKey: string;
     openRouterApiUrl: string;
+    // 新增：Google STT 配置
+    enableGoogleStt: boolean;
+    gcsBucketName: string;
 }
 
 export interface LanguageConfig {
@@ -23,6 +26,7 @@ export interface LanguageConfig {
     sourceLanguage: string;
     targetLanguage: string;
     translationPrompt: string;
+    sttLanguageCode: string; // 新增：Google STT 的语言代码
 }
 
 export interface TranslationRequest {

@@ -1,64 +1,51 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getConfig, getLanguageConfigFromPath, getRelativePathFromLanguageRoot } from './config';
+import { getConfig, getLanguageConfigFromPath } from './config';
 import { convertSrtFileToLrc } from './converter';
 import { translateWithOpenRouter } from './translator';
 import { batchSyncFiles } from './sync';
 import { getCurrentYearMonth, findExistingBilingualLrc, buildOutputDir } from './utils';
+import { generateLrcFromAudio } from './stt';
+
+// 支持的音频格式
+const AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg', '.wma'];
 
 /**
- * 处理单个 SRT 文件
- * @returns 成功则返回 { lrcPath, audioBasePath, languageFolder, relativePath }，失败则返回 null
+ * 核心任务处理函数：整合已有字幕与 STT 功能
  */
-async function processSrtFile(srtFilePath: string): Promise<{
+async function processTask(
+    dirName: string,
+    baseName: string,
+    audioPath?: string,
+    srtPath?: string
+): Promise<{
     lrcPath: string;
     audioBasePath: string;
     languageFolder: string;
     relativePath: string;
 } | null> {
-    console.log(`🔍 DEBUG 扫描到文件: ${srtFilePath}`);
-    const fileName = path.basename(srtFilePath);
-    const baseName = fileName.replace(/\.srt$/i, '');
-    const dirName = path.dirname(srtFilePath);
+    const referencePath = audioPath || srtPath;
+    if (!referencePath) return null;
 
-    // 获取语言配置（支持子文件夹）
-    const langInfo = getLanguageConfigFromPath(srtFilePath);
-
-    if (!langInfo) {
-        console.log(`⚠️  跳过: ${srtFilePath} 不在已配置的语言文件夹中`);
-        return null;
-    }
+    const langInfo = getLanguageConfigFromPath(referencePath);
+    if (!langInfo) return null;
 
     const { config: languageConfig, languageRoot } = langInfo;
-
-    // 计算相对于语言文件夹的路径（仅用于显示）
-    const relativeFilePath = getRelativePathFromLanguageRoot(srtFilePath, languageRoot);
-    const relativeDir = path.dirname(relativeFilePath);
-    const relativeDirClean = relativeDir === '.' ? '' : relativeDir;
-
-    // output 基础目录
     const outputBaseDir = path.join(languageRoot, 'output');
 
-    // 检查是否已存在双语 LRC（扁平化搜索，不传 relativePath）
+    // 检查是否已存在双语 LRC
     const existingLrc = await findExistingBilingualLrc(outputBaseDir, '', baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
-        console.log(`⏭️  跳过: ${displayPath} 已存在`);
+        console.log(`⏭️  跳过: ${displayPath} (双语字幕已存在)`);
         return null;
     }
 
-    // 获取当前年月
     const yearMonth = getCurrentYearMonth();
-
-    // 输出目录（扁平化，不保留子文件夹层级）
     const outputDir = buildOutputDir(outputBaseDir, yearMonth, '');
-
-    // 单语 LRC 路径（与 SRT 同级）
     const monoLrcPath = path.join(dirName, `${baseName}.lrc`);
-    // 双语 LRC 路径（在 output 文件夹中，扁平化）
     const bilingualLrcPath = path.join(outputDir, `${baseName}.lrc`);
 
-    // 确保 output 文件夹存在
     try {
         await fs.mkdir(outputDir, { recursive: true });
     } catch (error) {
@@ -66,47 +53,63 @@ async function processSrtFile(srtFilePath: string): Promise<{
         return null;
     }
 
-    // 显示相对路径，更清晰
-    const displayPath = path.relative(languageRoot, srtFilePath);
-    console.log(`\n📝 处理: ${languageConfig.folderName}/${displayPath}`);
+    const displayPath = path.relative(languageRoot, referencePath);
+    console.log(`\n📝 处理任务: ${languageConfig.folderName}/${displayPath}`);
 
     try {
         let lrcContent: string;
 
-        // 步骤 1: SRT -> 单语 LRC
+        // ---------------- 阶段 1: 获取单语 LRC ----------------
         try {
+            // 策略 A: 本地已存在单语 LRC，直接读取
             await fs.access(monoLrcPath);
-            console.log('📖 步骤 1/3: 单语 LRC 已存在，跳过转换');
+            console.log('📖 阶段 1/3: 单语 LRC 已存在，跳过生成');
             lrcContent = await fs.readFile(monoLrcPath, 'utf-8');
         } catch {
-            console.log('🔄 步骤 1/3: 转换 SRT 到单语 LRC 格式...');
-            lrcContent = await convertSrtFileToLrc(srtFilePath);
-
-            if (!lrcContent.trim()) {
-                console.log('⚠️  警告: 转换后内容为空，跳过翻译');
-                return null;
+            // 单语 LRC 不存在，查找兜底方案
+            if (srtPath) {
+                // 策略 B: 优先使用本地 SRT 转换为单语 LRC
+                console.log('🔄 阶段 1/3: 检测到本地 SRT 文件，正在转换为单语 LRC 格式...');
+                lrcContent = await convertSrtFileToLrc(srtPath);
+                await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
+                console.log(`💾 已保存本地单语 LRC: ${baseName}.lrc`);
+            } else {
+                // 策略 C: 既没 LRC 也没 SRT，触发 Google STT
+                const appConfig = getConfig();
+                if (appConfig.enableGoogleStt && audioPath) {
+                    console.log('🎙️  阶段 1/3: 未检测到本地字幕，启动 Google STT 自动识别...');
+                    lrcContent = await generateLrcFromAudio(
+                        audioPath,
+                        languageConfig.sttLanguageCode,
+                        appConfig.gcsBucketName
+                    );
+                    await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
+                    console.log(`💾 成功保存 STT 识别结果至: ${baseName}.lrc`);
+                } else {
+                    console.log(`⚠️  跳过: 没有字幕文件，且 STT 未开启或缺少音频`);
+                    return null;
+                }
             }
-
-            // 保存单语 LRC
-            await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
-            console.log(`💾 已保存单语 LRC: ${baseName}.lrc`);
         }
 
-        // 步骤 2: 调用 API 翻译
-        console.log('🌐 步骤 2/3: 调用 AI 翻译...');
+        if (!lrcContent.trim()) {
+            console.log('⚠️  警告: 提取的单语文本为空，终止翻译');
+            return null;
+        }
+
+        // ---------------- 阶段 2 & 3: 翻译与保存 (复用现有逻辑) ----------------
+        console.log('🌐 阶段 2/3: 调用大模型进行翻译...');
         const translatedContent = await translateWithOpenRouter(
             lrcContent,
             languageConfig.translationPrompt
         );
 
-        // 步骤 3: 保存双语 LRC
-        console.log('💾 步骤 3/3: 保存双语 LRC 文件...');
+        console.log('💾 阶段 3/3: 保存双语 LRC 文件...');
         await fs.writeFile(bilingualLrcPath, translatedContent, 'utf-8');
 
         const outputDisplayPath = path.relative(languageRoot, bilingualLrcPath);
-        console.log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
+        console.log(`✅ 翻译完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
-        // 返回文件信息用于同步（音频路径仍指向原始目录）
         return {
             lrcPath: bilingualLrcPath,
             audioBasePath: dirName,
@@ -114,48 +117,50 @@ async function processSrtFile(srtFilePath: string): Promise<{
             relativePath: ''
         };
     } catch (error) {
-        console.error(`❌ 错误: ${error}`);
+        console.error(`❌ 处理时发生错误: ${error}`);
         return null;
     }
 }
 
 /**
- * 扫描文件夹并处理所有 SRT 文件
- * @returns 成功处理的文件列表
+ * 智能扫描：同时检索音频和 SRT，进行配对处理
  */
-async function scanAndProcess(dirPath: string): Promise<Array<{
-    lrcPath: string;
-    audioBasePath: string;
-    languageFolder: string;
-    relativePath: string;
-}>> {
-    const processedFiles: Array<{
-        lrcPath: string;
-        audioBasePath: string;
-        languageFolder: string;
-        relativePath: string;
-    }> = [];
+async function scanAndProcess(dirPath: string): Promise<Array<any>> {
+    const processedFiles: Array<any> = [];
 
     try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+        // 用 Map 把同一基名（如 ep01.mp3 和 ep01.srt）的文件归拢在一起
+        const itemMap = new Map<string, { audioPath?: string, srtPath?: string }>();
 
         for (const entry of entries) {
             const fullPath = path.join(dirPath, entry.name);
 
             if (entry.isDirectory()) {
-                // 跳过 output 文件夹
-                if (entry.name === 'output') {
-                    continue;
-                }
-                // 递归处理子文件夹
+                if (entry.name === 'output') continue;
                 const subResults = await scanAndProcess(fullPath);
                 processedFiles.push(...subResults);
-            } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.srt')) {
-                // 处理 SRT 文件
-                const result = await processSrtFile(fullPath);
-                if (result) {
-                    processedFiles.push(result);
+            } else if (entry.isFile()) {
+                const ext = path.extname(entry.name).toLowerCase();
+                const baseName = entry.name.slice(0, -ext.length);
+
+                if (AUDIO_EXTS.includes(ext)) {
+                    if (!itemMap.has(baseName)) itemMap.set(baseName, {});
+                    itemMap.get(baseName)!.audioPath = fullPath;
+                } else if (ext === '.srt') {
+                    if (!itemMap.has(baseName)) itemMap.set(baseName, {});
+                    itemMap.get(baseName)!.srtPath = fullPath;
                 }
+            }
+        }
+
+        // 开始分发处理任务
+        for (const [baseName, item] of itemMap) {
+            // 只要匹配到音频或 srt 中的任何一个，就进入流水线
+            const result = await processTask(dirPath, baseName, item.audioPath, item.srtPath);
+            if (result) {
+                processedFiles.push(result);
             }
         }
     } catch (error) {
@@ -169,43 +174,32 @@ async function scanAndProcess(dirPath: string): Promise<Array<{
  * 主函数
  */
 async function main() {
-    // ============ 时间戳设置 - 必须在第一行! ============
     const originalLog = console.log;
     const originalError = console.error;
-
     function getTimestamp(): string {
         return new Date().toLocaleString('zh-CN', { hour12: false });
     }
+    console.log = (...args: any[]) => originalLog(`[${getTimestamp()}]`, ...args);
+    console.error = (...args: any[]) => originalError(`[${getTimestamp()}]`, ...args);
 
-    console.log = (...args: any[]) => {
-        originalLog(`[${getTimestamp()}]`, ...args);
-    };
-
-    console.error = (...args: any[]) => {
-        originalError(`[${getTimestamp()}]`, ...args);
-    };
-    // ===================================================
-    console.log('🎬 字幕自动翻译工具 - 手动模式\n');
+    console.log('🎬 字幕自动翻译工具 - 混合调度模式 (SRT优先 / 智能唤起 STT)\n');
     try {
         const config = getConfig();
         console.log(`📂 根目录: ${config.rootDir}`);
-        console.log(`🤖 模型: ${config.currentModel}`);
-        if (config.syncDir) {
-            console.log(`📦 同步目录: ${config.syncDir}`);
-        }
-        console.log('\n开始扫描文件夹...\n');
-
+        console.log(`🤖 翻译模型: ${config.currentModel}`);
+        console.log(`🎙️  STT 状态: ${config.enableGoogleStt ? '已开启 (自动兜底无字幕音频)' : '已关闭'}`);
+        if (config.syncDir) console.log(`📦 同步目录: ${config.syncDir}`);
+        console.log('\n开始扫描文件夹...');
 
         const processedFiles = await scanAndProcess(config.rootDir);
 
-        console.log('\n🎉 所有翻译任务完成！');
+        console.log('\n🎉 所有任务处理完成！');
 
-        // 批量同步文件
         if (processedFiles.length > 0 && config.syncDir) {
             await batchSyncFiles(processedFiles);
         }
     } catch (error) {
-        console.error(`\n❌ 错误: ${error}`);
+        console.error(`\n❌ 致命错误: ${error}`);
         process.exit(1);
     }
 }

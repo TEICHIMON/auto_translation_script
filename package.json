@@ -16,17 +16,25 @@
     "dev:sync": "ts-node src/sync-only.ts",
     "dev:convert": "ts-node src/convert-only.ts"
   },
-  "keywords": ["subtitle", "lrc", "srt", "translation", "openai"],
+  "keywords": [
+    "subtitle",
+    "lrc",
+    "srt",
+    "translation",
+    "openai"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.4.5",
+    "@google-cloud/speech": "^7.3.0",
+    "@google-cloud/storage": "^7.19.0",
+    "axios": "^1.7.2",
     "chokidar": "^3.6.0",
-    "axios": "^1.7.2"
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
-    "typescript": "^5.4.5",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
   }
 }
