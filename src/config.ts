@@ -13,39 +13,15 @@ const LANGUAGE_CONFIGS: LanguageConfig[] = [
         folderName: 'English',
         sourceLanguage: 'English',
         targetLanguage: 'Chinese',
-        translationPrompt: `请为这个字幕添加中文翻译，生成lrc格式的英中字幕
-
-格式要求：
-[时间戳]英文原文${DELIMITER}中文翻译
-
-注意事项：
-1. 英文原文保持原样，包括单词之间的空格
-2. 分隔符"${DELIMITER}"两侧不要有任何空格
-3. 尽可能做到直译，不要意译，保持原文的风格和表达方式
-
-示例：
-[00:20.00]Hello world${DELIMITER}你好世界
-[00:24.40]How are you?${DELIMITER}你好吗？
-[00:28.15]I'm fine, thank you${DELIMITER}我很好，谢谢`
+        translationPrompt: `请为这个字幕添加中文翻译，生成lrc格式的英中字幕\n\n格式要求：\n[时间戳]英文原文${DELIMITER}中文翻译\n\n注意事项：\n1. 英文原文保持原样，包括单词之间的空格\n2. 分隔符"${DELIMITER}"两侧不要有任何空格\n3. 尽可能做到直译，不要意译，保持原文的风格和表达方式\n\n示例：\n[00:20.00]Hello world${DELIMITER}你好世界\n[00:24.40]How are you?${DELIMITER}你好吗？\n[00:28.15]I'm fine, thank you${DELIMITER}我很好，谢谢`,
+        sttLanguageCode: 'en-US'
     },
     {
         folderName: 'Japanese',
         sourceLanguage: 'Japanese',
         targetLanguage: 'Chinese',
-        translationPrompt: `请为这个字幕添加中文翻译，生成lrc格式的日中字幕
-
-格式要求：
-[时间戳]日文原文${DELIMITER}中文翻译
-
-注意事项：
-1. 日文原文保持原样
-2. 分隔符"${DELIMITER}"两侧不要有任何空格
-3. 尽可能做到直译，不要意译，保持原文的风格和表达方式
-
-示例：
-[00:20.00]こんにちは${DELIMITER}你好
-[00:24.40]元気ですか？${DELIMITER}你好吗？
-[00:28.15]ありがとう${DELIMITER}谢谢`
+        translationPrompt: `请为这个字幕添加中文翻译，生成lrc格式的日中字幕\n\n格式要求：\n[时间戳]日文原文${DELIMITER}中文翻译\n\n注意事项：\n1. 日文原文保持原样\n2. 分隔符"${DELIMITER}"两侧不要有任何空格\n3. 尽可能做到直译，不要意译，保持原文的风格和表达方式\n\n示例：\n[00:20.00]こんにちは${DELIMITER}你好\n[00:24.40]元気ですか？${DELIMITER}你好吗？\n[00:28.15]ありがとう${DELIMITER}谢谢`,
+        sttLanguageCode: 'ja-JP'
     }
 ];
 
@@ -54,13 +30,7 @@ const LANGUAGE_CONFIGS: LanguageConfig[] = [
  */
 export function getApiProvider(modelName: string): ApiProvider {
     const lowerModel = modelName.toLowerCase();
-
-    // Claude 模型
-    if (lowerModel.includes('claude')) {
-        return 'claude';
-    }
-
-    // OpenRouter 模型（通常包含 / 或特定前缀）
+    if (lowerModel.includes('claude')) return 'claude';
     if (lowerModel.includes('/') ||
         lowerModel.includes('google') ||
         lowerModel.includes('gemini') ||
@@ -69,45 +39,32 @@ export function getApiProvider(modelName: string): ApiProvider {
         lowerModel.includes('llama')) {
         return 'openrouter';
     }
-
-    // 默认使用 OpenAI（gpt-* 等）
     return 'openai';
 }
 
 export function getConfig(): SubtitleConfig {
     const rootDir = process.env.ROOT_DIR || '';
     const syncDir = process.env.SYNC_DIR || '';
-
-    // 当前模型
     const currentModel = process.env.CURRENT_MODEL || 'gpt-4o-mini';
-
-    // OpenAI 配置
     const openaiApiKey = process.env.OPENAI_API_KEY || '';
     const openaiApiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions';
-
-    // Claude 配置
     const claudeApiKey = process.env.CLAUDE_API_KEY || '';
     const claudeApiUrl = process.env.CLAUDE_API_URL || 'https://api.anthropic.com/v1/messages';
-
-    // OpenRouter 配置
     const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
     const openRouterApiUrl = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
 
-    if (!rootDir) {
-        throw new Error('请在 .env 文件中设置 ROOT_DIR（音频根目录路径）');
-    }
+    // STT 配置
+    const enableGoogleStt = process.env.ENABLE_GOOGLE_STT === 'true';
+    const gcsBucketName = process.env.GCS_BUCKET_NAME || '';
 
-    // 检查当前模型对应的 API Key 是否已配置
+    if (!rootDir) throw new Error('请在 .env 文件中设置 ROOT_DIR（音频根目录路径）');
+
     const provider = getApiProvider(currentModel);
-    if (provider === 'openai' && !openaiApiKey) {
-        throw new Error(`当前模型 ${currentModel} 需要 OPENAI_API_KEY`);
-    }
-    if (provider === 'claude' && !claudeApiKey) {
-        throw new Error(`当前模型 ${currentModel} 需要 CLAUDE_API_KEY`);
-    }
-    if (provider === 'openrouter' && !openRouterApiKey) {
-        throw new Error(`当前模型 ${currentModel} 需要 OPENROUTER_API_KEY`);
-    }
+    if (provider === 'openai' && !openaiApiKey) throw new Error(`当前模型 ${currentModel} 需要 OPENAI_API_KEY`);
+    if (provider === 'claude' && !claudeApiKey) throw new Error(`当前模型 ${currentModel} 需要 CLAUDE_API_KEY`);
+    if (provider === 'openrouter' && !openRouterApiKey) throw new Error(`当前模型 ${currentModel} 需要 OPENROUTER_API_KEY`);
+
+    if (enableGoogleStt && !gcsBucketName) throw new Error('开启了 STT 功能，但未在 .env 中配置 GCS_BUCKET_NAME');
 
     return {
         rootDir,
@@ -119,64 +76,26 @@ export function getConfig(): SubtitleConfig {
         claudeApiKey,
         claudeApiUrl,
         openRouterApiKey,
-        openRouterApiUrl
+        openRouterApiUrl,
+        enableGoogleStt,
+        gcsBucketName
     };
 }
 
-/**
- * 根据文件夹名获取语言配置（旧方法，保留兼容性）
- */
-export function getLanguageConfig(folderPath: string): LanguageConfig | null {
-    const folderName = path.basename(folderPath);
-    return LANGUAGE_CONFIGS.find(config => config.folderName === folderName) || null;
-}
-
-/**
- * 从完整文件路径中提取语言配置和语言根目录
- * 支持子文件夹结构，例如：English/podcast/ep01.srt
- *
- * @param filePath 文件的完整路径
- * @returns { config: 语言配置, languageRoot: 语言文件夹的完整路径 } 或 null
- */
 export function getLanguageConfigFromPath(filePath: string): { config: LanguageConfig; languageRoot: string } | null {
-    // 标准化路径分隔符
     const normalizedPath = filePath.replace(/\\/g, '/');
-
     for (const langConfig of LANGUAGE_CONFIGS) {
-        // 匹配路径中的语言文件夹（确保是完整的文件夹名，不是部分匹配）
         const pattern = new RegExp(`(.*[/])?(${langConfig.folderName})(/|$)`);
         const match = normalizedPath.match(pattern);
-
         if (match) {
-            // 计算语言文件夹的完整路径
             const prefix = match[1] || '';
             const languageRoot = path.join(prefix, langConfig.folderName).replace(/\/$/, '');
-
-            return {
-                config: langConfig,
-                languageRoot: languageRoot
-            };
+            return { config: langConfig, languageRoot: languageRoot };
         }
     }
-
     return null;
 }
 
-/**
- * 计算文件相对于语言文件夹的相对路径
- * 例如：filePath = /root/English/podcast/ep01.srt, languageRoot = /root/English
- * 返回：podcast/ep01.srt
- *
- * @param filePath 文件的完整路径
- * @param languageRoot 语言文件夹的完整路径
- * @returns 相对路径
- */
 export function getRelativePathFromLanguageRoot(filePath: string, languageRoot: string): string {
-    const normalizedFilePath = path.normalize(filePath);
-    const normalizedLanguageRoot = path.normalize(languageRoot);
-
-    // 获取相对路径
-    const relativePath = path.relative(normalizedLanguageRoot, normalizedFilePath);
-
-    return relativePath;
+    return path.relative(path.normalize(languageRoot), path.normalize(filePath));
 }
