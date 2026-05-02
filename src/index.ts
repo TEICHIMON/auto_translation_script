@@ -191,6 +191,13 @@ async function main() {
                     : '已关闭'
             }`
         );
+        console.log(
+            `✂️  LRC 分句: ${
+                appConfig.lrcSegmentationMode === 'llm'
+                    ? `DeepSeek/${appConfig.lrcSegmentationModel}`
+                    : '服务端启发式'
+            }`
+        );
         if (appConfig.syncDir) console.log(`📦 同步目录: ${appConfig.syncDir}`);
         console.log('\n开始扫描文件夹...');
 

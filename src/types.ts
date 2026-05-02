@@ -23,6 +23,10 @@ export interface SubtitleConfig {
     whisperServerUrl: string;
     whisperModel: string;
     whisperAutoRelease: boolean;
+    // LRC 分句配置
+    lrcSegmentationMode: LrcSegmentationMode;
+    lrcSegmentationModel: string;
+    lrcSegmentationChunkWords: number;
 }
 
 export interface LanguageConfig {
@@ -43,3 +47,26 @@ export interface TranslationResponse {
 }
 
 export type ApiProvider = 'openai' | 'claude' | 'openrouter' | 'deepseek';
+
+export type LrcSegmentationMode = 'heuristic' | 'llm';
+
+export interface WhisperWord {
+    start: number;
+    end: number;
+    word: string;
+}
+
+export interface WhisperSegment {
+    start: number;
+    end: number;
+    text: string;
+    words?: WhisperWord[];
+}
+
+export interface WhisperTranscriptionResult {
+    lrc: string;
+    duration: number;
+    lang?: string;
+    model_key?: string;
+    segments?: WhisperSegment[];
+}
