@@ -5,13 +5,21 @@ import { convertSrtFileToLrc } from './converter';
 import { translateWithOpenRouter } from './translator';
 import { batchSyncFiles } from './sync';
 import { getCurrentYearMonth, findExistingBilingualLrc, buildOutputDir } from './utils';
-import { generateLrcFromAudio } from './stt';
+import {
+    generateLrcFromAudioWhisper,
+    releaseWhisperVram,
+    getWhisperInvocationCount,
+    WhisperError
+} from './whisper-stt';
 
-// 支持的音频格式
 const AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg', '.wma'];
 
 /**
- * 核心任务处理函数：整合已有字幕与 STT 功能
+ * 核心任务处理:SRT 优先 → Whisper 兜底 → 翻译
+ *
+ * 错误策略:
+ *   - WhisperError(服务端不可用/出错):向上抛,中止整个 main
+ *   - 其他错误(单文件解析、翻译 API 抖动):log 后返回 null,继续下一个
  */
 async function processTask(
     dirName: string,
@@ -33,7 +41,6 @@ async function processTask(
     const { config: languageConfig, languageRoot } = langInfo;
     const outputBaseDir = path.join(languageRoot, 'output');
 
-    // 检查是否已存在双语 LRC
     const existingLrc = await findExistingBilingualLrc(outputBaseDir, '', baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
@@ -56,48 +63,52 @@ async function processTask(
     const displayPath = path.relative(languageRoot, referencePath);
     console.log(`\n📝 处理任务: ${languageConfig.folderName}/${displayPath}`);
 
-    try {
-        let lrcContent: string;
+    let lrcContent: string;
 
-        // ---------------- 阶段 1: 获取单语 LRC ----------------
-        try {
-            // 策略 A: 本地已存在单语 LRC，直接读取
-            await fs.access(monoLrcPath);
-            console.log('📖 阶段 1/3: 单语 LRC 已存在，跳过生成');
-            lrcContent = await fs.readFile(monoLrcPath, 'utf-8');
-        } catch {
-            // 单语 LRC 不存在，查找兜底方案
-            if (srtPath) {
-                // 策略 B: 优先使用本地 SRT 转换为单语 LRC
-                console.log('🔄 阶段 1/3: 检测到本地 SRT 文件，正在转换为单语 LRC 格式...');
+    // ---------------- 阶段 1: 获取单语 LRC ----------------
+    try {
+        await fs.access(monoLrcPath);
+        console.log('📖 阶段 1/3: 单语 LRC 已存在,跳过生成');
+        lrcContent = await fs.readFile(monoLrcPath, 'utf-8');
+    } catch {
+        if (srtPath) {
+            // 策略 A: 本地 SRT → 单语 LRC
+            try {
+                console.log('🔄 阶段 1/3: 检测到本地 SRT,正在转换为单语 LRC...');
                 lrcContent = await convertSrtFileToLrc(srtPath);
                 await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
                 console.log(`💾 已保存本地单语 LRC: ${baseName}.lrc`);
-            } else {
-                // 策略 C: 既没 LRC 也没 SRT，触发 Google STT
-                const appConfig = getConfig();
-                if (appConfig.enableGoogleStt && audioPath) {
-                    console.log('🎙️  阶段 1/3: 未检测到本地字幕，启动 Google STT 自动识别...');
-                    lrcContent = await generateLrcFromAudio(
-                        audioPath,
-                        languageConfig.sttLanguageCode,
-                        appConfig.gcsBucketName
-                    );
-                    await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
-                    console.log(`💾 成功保存 STT 识别结果至: ${baseName}.lrc`);
-                } else {
-                    console.log(`⚠️  跳过: 没有字幕文件，且 STT 未开启或缺少音频`);
-                    return null;
-                }
+            } catch (e) {
+                console.error(`❌ SRT 转换失败,跳过本文件: ${e}`);
+                return null;
             }
+        } else {
+            // 策略 B: 没有 SRT → Whisper 兜底
+            const appConfig = getConfig();
+            if (!appConfig.enableWhisperStt || !audioPath) {
+                console.log(`⚠️  跳过: 没有字幕文件,且 Whisper STT 未启用或缺少音频`);
+                return null;
+            }
+            console.log('🎙️  阶段 1/3: 未检测到本地字幕,启动 Whisper 转录...');
+            // ⚠️ 这里抛出的 WhisperError 会向上传播,中止整个流水线
+            lrcContent = await generateLrcFromAudioWhisper(
+                audioPath,
+                languageConfig.sttLanguageCode,
+                appConfig.whisperServerUrl,
+                appConfig.whisperModel
+            );
+            await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
+            console.log(`💾 已保存 Whisper 转录结果: ${baseName}.lrc`);
         }
+    }
 
-        if (!lrcContent.trim()) {
-            console.log('⚠️  警告: 提取的单语文本为空，终止翻译');
-            return null;
-        }
+    if (!lrcContent.trim()) {
+        console.log('⚠️  警告: 单语文本为空,终止本文件翻译');
+        return null;
+    }
 
-        // ---------------- 阶段 2 & 3: 翻译与保存 (复用现有逻辑) ----------------
+    // ---------------- 阶段 2 & 3: 翻译与保存 ----------------
+    try {
         console.log('🌐 阶段 2/3: 调用大模型进行翻译...');
         const translatedContent = await translateWithOpenRouter(
             lrcContent,
@@ -117,90 +128,95 @@ async function processTask(
             relativePath: ''
         };
     } catch (error) {
-        console.error(`❌ 处理时发生错误: ${error}`);
+        console.error(`❌ 翻译/保存失败,跳过本文件: ${error}`);
         return null;
     }
 }
 
-/**
- * 智能扫描：同时检索音频和 SRT，进行配对处理
- */
 async function scanAndProcess(dirPath: string): Promise<Array<any>> {
     const processedFiles: Array<any> = [];
 
-    try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const itemMap = new Map<string, { audioPath?: string; srtPath?: string }>();
 
-        // 用 Map 把同一基名（如 ep01.mp3 和 ep01.srt）的文件归拢在一起
-        const itemMap = new Map<string, { audioPath?: string, srtPath?: string }>();
+    for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
 
-        for (const entry of entries) {
-            const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+            if (entry.name === 'output') continue;
+            const subResults = await scanAndProcess(fullPath);
+            processedFiles.push(...subResults);
+        } else if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase();
+            const baseName = entry.name.slice(0, -ext.length);
 
-            if (entry.isDirectory()) {
-                if (entry.name === 'output') continue;
-                const subResults = await scanAndProcess(fullPath);
-                processedFiles.push(...subResults);
-            } else if (entry.isFile()) {
-                const ext = path.extname(entry.name).toLowerCase();
-                const baseName = entry.name.slice(0, -ext.length);
-
-                if (AUDIO_EXTS.includes(ext)) {
-                    if (!itemMap.has(baseName)) itemMap.set(baseName, {});
-                    itemMap.get(baseName)!.audioPath = fullPath;
-                } else if (ext === '.srt') {
-                    if (!itemMap.has(baseName)) itemMap.set(baseName, {});
-                    itemMap.get(baseName)!.srtPath = fullPath;
-                }
+            if (AUDIO_EXTS.includes(ext)) {
+                if (!itemMap.has(baseName)) itemMap.set(baseName, {});
+                itemMap.get(baseName)!.audioPath = fullPath;
+            } else if (ext === '.srt') {
+                if (!itemMap.has(baseName)) itemMap.set(baseName, {});
+                itemMap.get(baseName)!.srtPath = fullPath;
             }
         }
+    }
 
-        // 开始分发处理任务
-        for (const [baseName, item] of itemMap) {
-            // 只要匹配到音频或 srt 中的任何一个，就进入流水线
-            const result = await processTask(dirPath, baseName, item.audioPath, item.srtPath);
-            if (result) {
-                processedFiles.push(result);
-            }
-        }
-    } catch (error) {
-        console.error(`扫描文件夹失败 ${dirPath}: ${error}`);
+    for (const [baseName, item] of itemMap) {
+        // WhisperError 会向上抛,中止本目录及后续扫描
+        const result = await processTask(dirPath, baseName, item.audioPath, item.srtPath);
+        if (result) processedFiles.push(result);
     }
 
     return processedFiles;
 }
 
-/**
- * 主函数
- */
 async function main() {
     const originalLog = console.log;
     const originalError = console.error;
-    function getTimestamp(): string {
-        return new Date().toLocaleString('zh-CN', { hour12: false });
-    }
+    const getTimestamp = () => new Date().toLocaleString('zh-CN', { hour12: false });
     console.log = (...args: any[]) => originalLog(`[${getTimestamp()}]`, ...args);
     console.error = (...args: any[]) => originalError(`[${getTimestamp()}]`, ...args);
 
-    console.log('🎬 字幕自动翻译工具 - 混合调度模式 (SRT优先 / 智能唤起 STT)\n');
+    console.log('🎬 字幕自动翻译工具 - 混合调度模式 (SRT 优先 / Whisper 兜底)\n');
+
+    let appConfig: ReturnType<typeof getConfig> | null = null;
+
     try {
-        const config = getConfig();
-        console.log(`📂 根目录: ${config.rootDir}`);
-        console.log(`🤖 翻译模型: ${config.currentModel}`);
-        console.log(`🎙️  STT 状态: ${config.enableGoogleStt ? '已开启 (自动兜底无字幕音频)' : '已关闭'}`);
-        if (config.syncDir) console.log(`📦 同步目录: ${config.syncDir}`);
+        appConfig = getConfig();
+        console.log(`📂 根目录: ${appConfig.rootDir}`);
+        console.log(`🤖 翻译模型: ${appConfig.translationProvider}/${appConfig.currentModel}`);
+        console.log(
+            `🎙️  Whisper STT: ${
+                appConfig.enableWhisperStt
+                    ? `已启用 (${appConfig.whisperServerUrl}, model=${appConfig.whisperModel})`
+                    : '已关闭'
+            }`
+        );
+        if (appConfig.syncDir) console.log(`📦 同步目录: ${appConfig.syncDir}`);
         console.log('\n开始扫描文件夹...');
 
-        const processedFiles = await scanAndProcess(config.rootDir);
+        const processedFiles = await scanAndProcess(appConfig.rootDir);
 
-        console.log('\n🎉 所有任务处理完成！');
+        console.log('\n🎉 所有任务处理完成!');
 
-        if (processedFiles.length > 0 && config.syncDir) {
+        if (processedFiles.length > 0 && appConfig.syncDir) {
             await batchSyncFiles(processedFiles);
         }
     } catch (error) {
-        console.error(`\n❌ 致命错误: ${error}`);
-        process.exit(1);
+        if (error instanceof WhisperError) {
+            console.error(`\n❌ Whisper 服务异常,流水线已中止: ${error.message}`);
+        } else {
+            console.error(`\n❌ 致命错误,流水线已中止: ${error}`);
+        }
+        process.exitCode = 1;
+    } finally {
+        // 仅在本轮真的用过 Whisper 时才发 release
+        if (
+            appConfig?.enableWhisperStt &&
+            appConfig?.whisperAutoRelease &&
+            getWhisperInvocationCount() > 0
+        ) {
+            await releaseWhisperVram(appConfig.whisperServerUrl);
+        }
     }
 }
 

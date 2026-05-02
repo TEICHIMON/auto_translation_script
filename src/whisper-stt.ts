@@ -1,0 +1,214 @@
+import fs from 'fs/promises';
+import path from 'path';
+
+/**
+ * Whisper 调用相关错误。捕获到此异常应中止整个流水线。
+ */
+export class WhisperError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'WhisperError';
+    }
+}
+
+interface JobSubmitResponse {
+    job_id: string;
+    duration: number;
+}
+
+interface ResultResponse {
+    lrc: string;
+}
+
+// 本轮是否实际调用过 Whisper(用于决定是否 auto-release)
+let invocationCount = 0;
+export function getWhisperInvocationCount(): number {
+    return invocationCount;
+}
+
+/**
+ * 提交转录任务
+ */
+async function submitJob(
+    audioPath: string,
+    lang: string,
+    model: string,
+    serverUrl: string
+): Promise<JobSubmitResponse> {
+    const audioBuffer = await fs.readFile(audioPath);
+    const fileName = path.basename(audioPath);
+
+    const form = new FormData();
+    form.append(
+        'audio',
+        new Blob([audioBuffer], { type: 'application/octet-stream' }),
+        fileName
+    );
+    form.append('lang', lang);
+    form.append('model', model);
+
+    let res: Response;
+    try {
+        res = await fetch(`${serverUrl}/jobs`, { method: 'POST', body: form });
+    } catch (e) {
+        throw new WhisperError(`无法连接 Whisper 服务器 (${serverUrl}): ${e}`);
+    }
+
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new WhisperError(`提交任务失败 (HTTP ${res.status}): ${text}`);
+    }
+
+    return (await res.json()) as JobSubmitResponse;
+}
+
+/**
+ * 订阅 SSE,按 10% 阶梯打印进度,直到 done/error
+ */
+async function streamProgress(jobId: string, serverUrl: string): Promise<void> {
+    let res: Response;
+    try {
+        res = await fetch(`${serverUrl}/jobs/${jobId}/events`, {
+            headers: { Accept: 'text/event-stream' }
+        });
+    } catch (e) {
+        throw new WhisperError(`无法订阅进度流: ${e}`);
+    }
+
+    if (!res.ok || !res.body) {
+        throw new WhisperError(`订阅 SSE 失败 (HTTP ${res.status})`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let lastReportedTier = -1; // 已上报的最后一档 (0=0%, 1=10%, ...)
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // 累积并规范换行
+            buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+
+            let sepIdx: number;
+            while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
+                const rawEvent = buffer.slice(0, sepIdx);
+                buffer = buffer.slice(sepIdx + 2);
+                if (!rawEvent.trim()) continue;
+
+                let eventName = 'message';
+                let data = '';
+                for (const line of rawEvent.split('\n')) {
+                    if (line.startsWith('event:')) {
+                        eventName = line.slice(6).trim();
+                    } else if (line.startsWith('data:')) {
+                        // 多个 data: 行按换行拼接(SSE 规范)
+                        data += (data ? '\n' : '') + line.slice(5).replace(/^ /, '');
+                    }
+                }
+
+                if (eventName === 'status') {
+                    if (data === 'loading_model') {
+                        console.log('  ⏳ 服务端加载模型中...');
+                    } else if (data === 'processing') {
+                        console.log('  🎙️  开始转录');
+                    }
+                } else if (eventName === 'progress') {
+                    const parts = data.split('|');
+                    if (parts.length >= 2) {
+                        const cur = parseFloat(parts[0]);
+                        const total = parseFloat(parts[1]);
+                        if (total > 0 && Number.isFinite(cur) && Number.isFinite(total)) {
+                            const pct = Math.min((cur / total) * 100, 100);
+                            const tier = Math.floor(pct / 10);
+                            if (tier > lastReportedTier) {
+                                console.log(`  📊 进度: ${tier * 10}%`);
+                                lastReportedTier = tier;
+                            }
+                        }
+                    }
+                } else if (eventName === 'done') {
+                    console.log('  ✅ 转录完成 (100%)');
+                    return;
+                } else if (eventName === 'error') {
+                    throw new WhisperError(`服务端转录错误: ${data}`);
+                }
+                // ping 等其他事件忽略
+            }
+        }
+    } finally {
+        try {
+            reader.releaseLock();
+        } catch {
+            /* ignore */
+        }
+    }
+
+    throw new WhisperError('SSE 连接意外结束,未收到 done 事件');
+}
+
+/**
+ * 取回最终 LRC
+ */
+async function fetchResult(jobId: string, serverUrl: string): Promise<string> {
+    let res: Response;
+    try {
+        res = await fetch(`${serverUrl}/jobs/${jobId}/result`);
+    } catch (e) {
+        throw new WhisperError(`获取结果失败: ${e}`);
+    }
+    if (!res.ok) {
+        throw new WhisperError(`获取结果失败 (HTTP ${res.status})`);
+    }
+    const body = (await res.json()) as ResultResponse;
+    if (!body.lrc || !body.lrc.trim()) {
+        throw new WhisperError('Whisper 返回空 LRC');
+    }
+    return body.lrc;
+}
+
+/**
+ * 对外主入口:从音频生成单语 LRC
+ *
+ * @param audioPath  本地音频路径
+ * @param sttLang    语言代码,接受 'en'/'ja' 或 'en-US'/'ja-JP'(自动取前两位)
+ * @param serverUrl  Whisper 服务器地址 (e.g. http://192.168.31.50:8000)
+ * @param model      模型变体 ('default' | 'large-v3')
+ */
+export async function generateLrcFromAudioWhisper(
+    audioPath: string,
+    sttLang: string,
+    serverUrl: string,
+    model: string = 'default'
+): Promise<string> {
+    invocationCount++;
+    const lang = sttLang.slice(0, 2).toLowerCase();
+
+    console.log(`🚀 步骤 1/3: 上传音频到 ${serverUrl} (lang=${lang}, model=${model})...`);
+    const { job_id, duration } = await submitJob(audioPath, lang, model, serverUrl);
+    console.log(`📦 任务已提交 (job_id=${job_id}, 音频时长=${duration.toFixed(1)}s)`);
+
+    console.log(`⏱️  步骤 2/3: 监听转录进度...`);
+    await streamProgress(job_id, serverUrl);
+
+    console.log(`📥 步骤 3/3: 取回 LRC 结果...`);
+    return await fetchResult(job_id, serverUrl);
+}
+
+/**
+ * 通知服务器释放显存。失败不抛(收尾用)
+ */
+export async function releaseWhisperVram(serverUrl: string): Promise<void> {
+    try {
+        const res = await fetch(`${serverUrl}/release`, { method: 'POST' });
+        if (res.ok) {
+            console.log(`🧹 已通知 Whisper 服务器释放显存`);
+        } else {
+            console.log(`⚠️  释放显存请求返回 ${res.status},忽略`);
+        }
+    } catch (e) {
+        console.log(`⚠️  无法连接 Whisper 服务器释放显存: ${e}`);
+    }
+}

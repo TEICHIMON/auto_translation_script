@@ -43,8 +43,9 @@ cp .env.example .env
 
 ```env
 ROOT_DIR=/Users/你的用户名/音频处理
+TRANSLATION_PROVIDER=openai
+CURRENT_MODEL=gpt-4o-mini
 OPENAI_API_KEY=sk-proj-your-api-key-here
-OPENAI_MODEL=gpt-4o-mini
 
 # 可选：自动同步到手机文件夹
 SYNC_DIR=/Users/你的用户名/手机同步
@@ -224,19 +225,26 @@ English/output/audio1.lrc
 - ✅ 分隔符"|||"两侧不要空格
 - ✅ 提供示例格式
 
-### 更换模型
+### 更换翻译供应商和模型
 
-在 `.env` 文件中修改 `OPENAI_MODEL`：
+在 `.env` 文件中修改 `TRANSLATION_PROVIDER` 和 `CURRENT_MODEL`：
 
 ```env
-# GPT-4o mini (推荐，性价比高)
-OPENAI_MODEL=gpt-4o-mini
+# OpenAI
+TRANSLATION_PROVIDER=openai
+CURRENT_MODEL=gpt-4o-mini
 
-# GPT-4o (更强大但更贵)
-OPENAI_MODEL=gpt-4o
+# Claude
+TRANSLATION_PROVIDER=claude
+CURRENT_MODEL=claude-3-5-sonnet-latest
 
-# GPT-3.5 Turbo (便宜但效果较差)
-OPENAI_MODEL=gpt-3.5-turbo
+# OpenRouter
+TRANSLATION_PROVIDER=openrouter
+CURRENT_MODEL=openai/gpt-4o-mini
+
+# DeepSeek
+TRANSLATION_PROVIDER=deepseek
+CURRENT_MODEL=deepseek-v4-flash
 ```
 
 ## 故障排除
