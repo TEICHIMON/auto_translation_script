@@ -1,17 +1,15 @@
 {
   "name": "subtitle-automation",
   "version": "1.0.0",
-  "description": "自动化字幕翻译工具：SRT -> 双语 LRC",
+  "description": "自动化字幕翻译工具:SRT/Whisper -> 双语 LRC",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "watch": "node dist/watcher.js",
     "translate": "node dist/translate-lrc.js",
     "sync": "node dist/sync-only.js",
     "convert": "node dist/convert-only.js",
     "dev": "ts-node src/index.ts",
-    "dev:watch": "ts-node src/watcher.ts",
     "dev:translate": "ts-node src/translate-lrc.ts",
     "dev:sync": "ts-node src/sync-only.ts",
     "dev:convert": "ts-node src/convert-only.ts"
@@ -21,15 +19,12 @@
     "lrc",
     "srt",
     "translation",
-    "openai"
+    "whisper"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@google-cloud/speech": "^7.3.0",
-    "@google-cloud/storage": "^7.19.0",
     "axios": "^1.7.2",
-    "chokidar": "^3.6.0",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {

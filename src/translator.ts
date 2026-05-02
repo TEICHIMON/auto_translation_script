@@ -1,5 +1,51 @@
 import axios from 'axios';
-import { getConfig, getApiProvider } from './config';
+import { getConfig } from './config';
+
+interface OpenAICompatibleResponse {
+    choices?: Array<{
+        message?: {
+            content?: string | null;
+        };
+    }>;
+}
+
+/**
+ * 调用 OpenAI 兼容的 Chat Completions API
+ */
+async function callOpenAICompatible(
+    apiUrl: string,
+    apiKey: string,
+    model: string,
+    prompt: string,
+    extraBody: Record<string, unknown> = {}
+): Promise<string> {
+    const response = await axios.post<OpenAICompatibleResponse>(
+        apiUrl,
+        {
+            model: model,
+            messages: [
+                {
+                    role: 'user',
+                    content: prompt
+                }
+            ],
+            ...extraBody
+        },
+        {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        }
+    );
+
+    const content = response.data.choices?.[0]?.message?.content;
+    if (!content || !content.trim()) {
+        throw new Error('API 返回空翻译结果');
+    }
+
+    return content.trim();
+}
 
 /**
  * 调用 OpenAI API
@@ -10,26 +56,7 @@ async function callOpenAI(
     model: string,
     prompt: string
 ): Promise<string> {
-    const response = await axios.post(
-        apiUrl,
-        {
-            model: model,
-            messages: [
-                {
-                    role: 'user',
-                    content: prompt
-                }
-            ],
-        },
-        {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            }
-        }
-    );
-
-    return response.data.choices[0].message.content.trim();
+    return callOpenAICompatible(apiUrl, apiKey, model, prompt);
 }
 
 /**
@@ -74,37 +101,32 @@ async function callOpenRouter(
     model: string,
     prompt: string
 ): Promise<string> {
-    const response = await axios.post(
-        apiUrl,
-        {
-            model: model,
-            messages: [
-                {
-                    role: 'user',
-                    content: prompt
-                }
-            ],
-        },
-        {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            }
-        }
-    );
-
-    return response.data.choices[0].message.content.trim();
+    return callOpenAICompatible(apiUrl, apiKey, model, prompt);
 }
 
 /**
- * 统一的翻译接口 - 根据 CURRENT_MODEL 自动选择 API
+ * 调用 DeepSeek API（兼容 OpenAI 格式）
+ */
+async function callDeepSeek(
+    apiUrl: string,
+    apiKey: string,
+    model: string,
+    prompt: string
+): Promise<string> {
+    return callOpenAICompatible(apiUrl, apiKey, model, prompt, {
+        thinking: { type: 'disabled' }
+    });
+}
+
+/**
+ * 统一的翻译接口 - 优先使用 TRANSLATION_PROVIDER,否则根据 CURRENT_MODEL 推断 API
  */
 export async function translateWithOpenRouter(
     lrcContent: string,
     prompt: string
 ): Promise<string> {
     const config = getConfig();
-    const provider = getApiProvider(config.currentModel);
+    const provider = config.translationProvider;
     const fullPrompt = `${prompt}\n\n${lrcContent}`;
 
     console.log(`正在调用 ${provider.toUpperCase()} API (${config.currentModel}) 翻译...`);
@@ -131,6 +153,15 @@ export async function translateWithOpenRouter(
                 );
                 break;
 
+            case 'deepseek':
+                result = await callDeepSeek(
+                    config.deepSeekApiUrl,
+                    config.deepSeekApiKey,
+                    config.currentModel,
+                    fullPrompt
+                );
+                break;
+
             case 'openai':
             default:
                 result = await callOpenAI(
@@ -147,8 +178,12 @@ export async function translateWithOpenRouter(
 
     } catch (error) {
         if (axios.isAxiosError(error)) {
+            const status = error.response?.status ?? 'NO_RESPONSE';
+            const detail = error.response?.data
+                ? JSON.stringify(error.response.data)
+                : error.message;
             throw new Error(
-                `${provider.toUpperCase()} API 调用失败: ${error.response?.status} - ${JSON.stringify(error?.response?.data)}}`
+                `${provider.toUpperCase()} API 调用失败: ${status} - ${detail}`
             );
         }
         throw error;
