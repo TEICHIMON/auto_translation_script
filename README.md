@@ -247,6 +247,21 @@ TRANSLATION_PROVIDER=deepseek
 CURRENT_MODEL=deepseek-v4-flash
 ```
 
+### Whisper 与 LRC 分句
+
+无本地 SRT 时可启用 Whisper 服务器兜底转录；`server_general_lrc.py` 默认对英文、日文都使用 `large-v3`。
+
+```env
+ENABLE_WHISPER_STT=true
+WHISPER_SERVER_URL=http://192.168.31.50:8000
+WHISPER_MODEL=default
+
+# 使用 DeepSeek 根据 word timestamps 重新分句
+LRC_SEGMENTATION_MODE=llm
+LRC_SEGMENTATION_MODEL=deepseek-v4-flash
+LRC_SEGMENTATION_CHUNK_WORDS=900
+```
+
 ## 故障排除
 
 ### 1. API 调用失败
@@ -287,6 +302,8 @@ src/
 ├── convert-only.ts   # 转换模式（SRT → 单语）⭐ 新增
 ├── sync-only.ts      # 仅同步模式
 ├── converter.ts      # SRT → LRC 转换逻辑
+├── whisper-stt.ts    # Whisper 服务器客户端
+├── lrc-segmenter.ts  # DeepSeek word timestamp 分句
 ├── translator.ts     # OpenAI API 调用
 ├── sync.ts           # 文件同步逻辑
 ├── config.ts         # 配置管理

@@ -1,5 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { getConfig } from './config';
+import { segmentWhisperResultWithDeepSeek } from './lrc-segmenter';
+import { WhisperTranscriptionResult } from './types';
 
 /**
  * Whisper 调用相关错误。捕获到此异常应中止整个流水线。
@@ -14,10 +17,6 @@ export class WhisperError extends Error {
 interface JobSubmitResponse {
     job_id: string;
     duration: number;
-}
-
-interface ResultResponse {
-    lrc: string;
 }
 
 // 本轮是否实际调用过 Whisper(用于决定是否 auto-release)
@@ -152,7 +151,7 @@ async function streamProgress(jobId: string, serverUrl: string): Promise<void> {
 /**
  * 取回最终 LRC
  */
-async function fetchResult(jobId: string, serverUrl: string): Promise<string> {
+async function fetchResult(jobId: string, serverUrl: string): Promise<WhisperTranscriptionResult> {
     let res: Response;
     try {
         res = await fetch(`${serverUrl}/jobs/${jobId}/result`);
@@ -162,11 +161,14 @@ async function fetchResult(jobId: string, serverUrl: string): Promise<string> {
     if (!res.ok) {
         throw new WhisperError(`获取结果失败 (HTTP ${res.status})`);
     }
-    const body = (await res.json()) as ResultResponse;
-    if (!body.lrc || !body.lrc.trim()) {
-        throw new WhisperError('Whisper 返回空 LRC');
+    const body = (await res.json()) as WhisperTranscriptionResult;
+    const hasWordTimestamps = Boolean(
+        body.segments?.some(segment => segment.words && segment.words.length > 0)
+    );
+    if ((!body.lrc || !body.lrc.trim()) && !hasWordTimestamps) {
+        throw new WhisperError('Whisper 返回空 LRC 且缺少 word timestamps');
     }
-    return body.lrc;
+    return body;
 }
 
 /**
@@ -194,7 +196,22 @@ export async function generateLrcFromAudioWhisper(
     await streamProgress(job_id, serverUrl);
 
     console.log(`📥 步骤 3/3: 取回 LRC 结果...`);
-    return await fetchResult(job_id, serverUrl);
+    const result = await fetchResult(job_id, serverUrl);
+    const config = getConfig();
+
+    if (config.lrcSegmentationMode === 'llm') {
+        try {
+            return await segmentWhisperResultWithDeepSeek(result, lang, config);
+        } catch (error) {
+            console.log(`  ⚠️  DeepSeek 分句失败,回退服务端 LRC: ${error}`);
+        }
+    }
+
+    if (!result.lrc || !result.lrc.trim()) {
+        throw new WhisperError('DeepSeek 分句失败且服务端 LRC 为空');
+    }
+
+    return result.lrc;
 }
 
 /**

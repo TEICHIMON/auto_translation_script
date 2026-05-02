@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
-import { SubtitleConfig, LanguageConfig, ApiProvider } from './types';
+import { SubtitleConfig, LanguageConfig, ApiProvider, LrcSegmentationMode } from './types';
 
 dotenv.config();
 
@@ -34,6 +34,26 @@ function parseApiProvider(providerName: string): ApiProvider {
         return normalized;
     }
     throw new Error(`不支持的 TRANSLATION_PROVIDER: ${providerName}`);
+}
+
+function parseLrcSegmentationMode(modeName: string): LrcSegmentationMode {
+    const normalized = modeName.trim().toLowerCase();
+    if (normalized === 'heuristic' || normalized === 'llm') {
+        return normalized;
+    }
+    throw new Error(`不支持的 LRC_SEGMENTATION_MODE: ${modeName}`);
+}
+
+function parsePositiveIntEnv(name: string, defaultValue: number): number {
+    const raw = process.env[name];
+    if (!raw || !raw.trim()) return defaultValue;
+
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`${name} 必须是正整数`);
+    }
+
+    return parsed;
 }
 
 export function getApiProvider(modelName: string): ApiProvider {
@@ -74,6 +94,16 @@ export function getConfig(): SubtitleConfig {
     const whisperModel = process.env.WHISPER_MODEL || 'default';
     const whisperAutoRelease = (process.env.WHISPER_AUTO_RELEASE || 'true').toLowerCase() === 'true';
 
+    // LRC 分句配置。heuristic=使用服务端规则; llm=用 DeepSeek 基于 word timestamps 重切 LRC。
+    const lrcSegmentationMode = parseLrcSegmentationMode(
+        process.env.LRC_SEGMENTATION_MODE || 'heuristic'
+    );
+    const lrcSegmentationModel = process.env.LRC_SEGMENTATION_MODEL || 'deepseek-v4-flash';
+    const lrcSegmentationChunkWords = Math.min(
+        Math.max(parsePositiveIntEnv('LRC_SEGMENTATION_CHUNK_WORDS', 900), 200),
+        2500
+    );
+
     if (!rootDir) throw new Error('请在 .env 文件中设置 ROOT_DIR(音频根目录路径)');
 
     const provider = translationProviderEnv
@@ -87,6 +117,8 @@ export function getConfig(): SubtitleConfig {
         throw new Error(`当前模型 ${currentModel} 需要 OPENROUTER_API_KEY`);
     if (provider === 'deepseek' && !deepSeekApiKey)
         throw new Error(`当前模型 ${currentModel} 需要 DEEPSEEK_API_KEY`);
+    if (lrcSegmentationMode === 'llm' && !deepSeekApiKey)
+        throw new Error('LRC_SEGMENTATION_MODE=llm 需要 DEEPSEEK_API_KEY');
 
     if (enableWhisperStt && !whisperServerUrl) {
         throw new Error('开启了 Whisper STT,但未在 .env 中配置 WHISPER_SERVER_URL');
@@ -109,7 +141,10 @@ export function getConfig(): SubtitleConfig {
         enableWhisperStt,
         whisperServerUrl,
         whisperModel,
-        whisperAutoRelease
+        whisperAutoRelease,
+        lrcSegmentationMode,
+        lrcSegmentationModel,
+        lrcSegmentationChunkWords
     };
 }
 
