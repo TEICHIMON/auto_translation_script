@@ -5,7 +5,6 @@ const TRACE_ROOT = path.join(process.cwd(), '.tmp', 'runs');
 const LATEST_RUN_FILE = path.join(TRACE_ROOT, 'latest-run.txt');
 
 let activeRunDir: string | null = null;
-let activeTaskDir: string | null = null;
 
 export function traceTimestamp(date: Date = new Date()): string {
     return date.toISOString().replace(/[:.]/g, '-');
@@ -51,7 +50,6 @@ export async function startPipelineTrace(label: string, metadata: unknown): Prom
     await fs.writeFile(LATEST_RUN_FILE, runDir, 'utf-8');
 
     activeRunDir = runDir;
-    activeTaskDir = null;
 
     await writeTraceJson(runDir, '00-meta.json', {
         createdAt: new Date().toISOString(),
@@ -66,7 +64,6 @@ export async function startTaskTrace(label: string, metadata: unknown): Promise<
     if (!activeRunDir) return null;
 
     const taskDir = path.join(activeRunDir, 'tasks', `${traceTimestamp()}-${safeTraceName(label)}`);
-    activeTaskDir = taskDir;
 
     await ensureDir(taskDir);
     await fs.writeFile(path.join(activeRunDir, 'latest-task.txt'), taskDir, 'utf-8');
@@ -81,10 +78,6 @@ export async function startTaskTrace(label: string, metadata: unknown): Promise<
 
 export function getActiveRunDir(): string | null {
     return activeRunDir;
-}
-
-export function getActiveTaskDir(): string | null {
-    return activeTaskDir;
 }
 
 export async function readLatestRunDir(): Promise<string> {

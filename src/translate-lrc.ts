@@ -168,6 +168,8 @@ async function main() {
             `✂️  LRC 分句: ${
                 config.lrcSegmentationMode === 'llm'
                     ? `DeepSeek/${config.lrcSegmentationModel}`
+                    : config.lrcSegmentationMode === 'manual'
+                        ? 'Manual/web LLM'
                     : '服务端启发式'
             }, critique=${config.lrcSegmentationCritique ? 'on' : 'off'}\n`
         );

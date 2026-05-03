@@ -51,7 +51,7 @@ export interface TranslationResponse {
 
 export type ApiProvider = 'openai' | 'claude' | 'openrouter' | 'deepseek';
 
-export type LrcSegmentationMode = 'heuristic' | 'llm';
+export type LrcSegmentationMode = 'heuristic' | 'llm' | 'manual';
 
 export interface WhisperWord {
     start: number;

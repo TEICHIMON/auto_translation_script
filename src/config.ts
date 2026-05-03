@@ -45,7 +45,7 @@ function parseApiProvider(providerName: string): ApiProvider {
 
 function parseLrcSegmentationMode(modeName: string): LrcSegmentationMode {
     const normalized = modeName.trim().toLowerCase();
-    if (normalized === 'heuristic' || normalized === 'llm') {
+    if (normalized === 'heuristic' || normalized === 'llm' || normalized === 'manual') {
         return normalized;
     }
     throw new Error(`不支持的 LRC_SEGMENTATION_MODE: ${modeName}`);
@@ -101,7 +101,7 @@ export function getConfig(): SubtitleConfig {
     const whisperModel = process.env.WHISPER_MODEL || 'default';
     const whisperAutoRelease = (process.env.WHISPER_AUTO_RELEASE || 'true').toLowerCase() === 'true';
 
-    // LRC 分句配置。heuristic=使用服务端规则; llm=用 DeepSeek 基于 word timestamps 重切 LRC。
+    // LRC 分句配置。heuristic=使用服务端规则; llm=用 DeepSeek 重切; manual=人工粘贴网页 LLM 结果。
     const lrcSegmentationMode = parseLrcSegmentationMode(
         process.env.LRC_SEGMENTATION_MODE || 'heuristic'
     );
@@ -140,6 +140,7 @@ export function getConfig(): SubtitleConfig {
         throw new Error(`当前模型 ${currentModel} 需要 DEEPSEEK_API_KEY`);
     if (lrcSegmentationMode === 'llm' && !deepSeekApiKey)
         throw new Error('LRC_SEGMENTATION_MODE=llm 需要 DEEPSEEK_API_KEY');
+    // manual 模式不调用 DeepSeek,不需要 key
 
     if (enableWhisperStt && !whisperServerUrl) {
         throw new Error('开启了 Whisper STT,但未在 .env 中配置 WHISPER_SERVER_URL');
