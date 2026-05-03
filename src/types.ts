@@ -27,6 +27,9 @@ export interface SubtitleConfig {
     lrcSegmentationMode: LrcSegmentationMode;
     lrcSegmentationModel: string;
     lrcSegmentationChunkWords: number;
+    lrcSegmentationThinking: boolean;   // NEW
+    lrcSegmentationCritique: boolean;   // NEW
+
 }
 
 export interface LanguageConfig {
