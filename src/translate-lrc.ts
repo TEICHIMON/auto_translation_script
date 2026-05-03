@@ -1,29 +1,38 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getConfig, getLanguageConfigFromPath, getRelativePathFromLanguageRoot } from './config';
+import pLimit from 'p-limit';
+import { getConfig, getLanguageConfigFromPath } from './config';
 import { translateWithOpenRouter } from './translator';
 import { batchSyncFiles } from './sync';
 import { getCurrentYearMonth, findExistingBilingualLrc, buildOutputDir } from './utils';
+
+interface ProcessedFile {
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}
+
+function formatError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * 处理单个 LRC 文件 - 直接翻译模式
  * @returns 成功则返回 { lrcPath, audioBasePath, languageFolder, relativePath }，失败则返回 null
  */
-async function translateLrcFile(lrcFilePath: string): Promise<{
-    lrcPath: string;
-    audioBasePath: string;
-    languageFolder: string;
-    relativePath: string;
-} | null> {
+async function translateLrcFile(lrcFilePath: string): Promise<ProcessedFile | null> {
     const fileName = path.basename(lrcFilePath);
     const baseName = fileName.replace(/\.lrc$/i, '');
     const dirName = path.dirname(lrcFilePath);
+    const log = (msg: string) => console.log(`[${baseName}] ${msg}`);
+    const logErr = (msg: string) => console.error(`[${baseName}] ${msg}`);
 
     // 获取语言配置（支持子文件夹）
     const langInfo = getLanguageConfigFromPath(lrcFilePath);
 
     if (!langInfo) {
-        console.log(`⚠️  跳过: ${lrcFilePath} 不在已配置的语言文件夹中`);
+        log(`⚠️  跳过: ${lrcFilePath} 不在已配置的语言文件夹中`);
         return null;
     }
 
@@ -36,7 +45,7 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
     const existingLrc = await findExistingBilingualLrc(outputBaseDir, '', baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
-        console.log(`⏭️  跳过: ${displayPath} 已存在`);
+        log(`⏭️  跳过: ${displayPath} 已存在`);
         return null;
     }
 
@@ -52,37 +61,37 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
     try {
         await fs.mkdir(outputDir, { recursive: true });
     } catch (error) {
-        console.error(`创建 output 文件夹失败: ${error}`);
+        logErr(`创建 output 文件夹失败: ${error}`);
         return null;
     }
 
     // 显示相对路径，更清晰
     const displayPath = path.relative(languageRoot, lrcFilePath);
-    console.log(`\n📝 处理: ${languageConfig.folderName}/${displayPath}`);
+    log(`📝 处理: ${languageConfig.folderName}/${displayPath}`);
 
     try {
         // 1. 读取 LRC 内容
-        console.log('📖 步骤 1/2: 读取 LRC 文件...');
+        log('📖 步骤 1/2: 读取 LRC 文件...');
         const lrcContent = await fs.readFile(lrcFilePath, 'utf-8');
 
         if (!lrcContent.trim()) {
-            console.log('⚠️  警告: LRC 文件内容为空，跳过翻译');
+            log('⚠️  警告: LRC 文件内容为空，跳过翻译');
             return null;
         }
 
         // 2. 调用 API 翻译
-        console.log('🌐 步骤 2/2: 调用 AI 翻译...');
+        log('🌐 步骤 2/2: 调用 AI 翻译...');
         const translatedContent = await translateWithOpenRouter(
             lrcContent,
             languageConfig.translationPrompt
         );
 
         // 3. 保存翻译后的 LRC
-        console.log('💾 保存翻译后的 LRC 文件...');
+        log('💾 保存翻译后的 LRC 文件...');
         await fs.writeFile(translatedLrcPath, translatedContent, 'utf-8');
 
         const outputDisplayPath = path.relative(languageRoot, translatedLrcPath);
-        console.log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
+        log(`✅ 完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
         // 返回文件信息用于批量同步（音频路径仍指向原始目录）
         return {
@@ -92,27 +101,16 @@ async function translateLrcFile(lrcFilePath: string): Promise<{
             relativePath: ''
         };
     } catch (error) {
-        console.error(`❌ 错误: ${error}`);
+        logErr(`❌ 错误: ${error}`);
         return null;
     }
 }
 
 /**
- * 扫描文件夹并翻译所有 LRC 文件
- * @returns 成功处理的文件列表
+ * 扫描文件夹并收集所有 LRC 文件
  */
-async function scanAndTranslate(dirPath: string): Promise<Array<{
-    lrcPath: string;
-    audioBasePath: string;
-    languageFolder: string;
-    relativePath: string;
-}>> {
-    const processedFiles: Array<{
-        lrcPath: string;
-        audioBasePath: string;
-        languageFolder: string;
-        relativePath: string;
-    }> = [];
+async function scanAndTranslate(dirPath: string): Promise<string[]> {
+    const lrcFiles: string[] = [];
 
     try {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -126,21 +124,17 @@ async function scanAndTranslate(dirPath: string): Promise<Array<{
                     continue;
                 }
                 // 递归处理子文件夹
-                const subResults = await scanAndTranslate(fullPath);
-                processedFiles.push(...subResults);
+                const subFiles = await scanAndTranslate(fullPath);
+                lrcFiles.push(...subFiles);
             } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lrc')) {
-                // 翻译 LRC 文件
-                const result = await translateLrcFile(fullPath);
-                if (result) {
-                    processedFiles.push(result);
-                }
+                lrcFiles.push(fullPath);
             }
         }
     } catch (error) {
         console.error(`扫描文件夹失败 ${dirPath}: ${error}`);
     }
 
-    return processedFiles;
+    return lrcFiles;
 }
 
 /**
@@ -168,10 +162,35 @@ async function main() {
     try {
         const config = getConfig();
         console.log(`📂 根目录: ${config.rootDir}`);
-        console.log(`🤖 模型: ${config.translationProvider}/${config.currentModel}\n`);
+        console.log(`🤖 模型: ${config.translationProvider}/${config.currentModel}`);
+        console.log(`🚦 最大并发任务数: ${config.maxConcurrentTasks}`);
+        console.log(
+            `✂️  LRC 分句: ${
+                config.lrcSegmentationMode === 'llm'
+                    ? `DeepSeek/${config.lrcSegmentationModel}`
+                    : '服务端启发式'
+            }, critique=${config.lrcSegmentationCritique ? 'on' : 'off'}\n`
+        );
         console.log('开始扫描 LRC 文件...\n');
 
-        const processedFiles = await scanAndTranslate(config.rootDir);
+        const lrcFiles = await scanAndTranslate(config.rootDir);
+        console.log(`🔎 发现 LRC 文件: ${lrcFiles.length}`);
+
+        const limit = pLimit(config.maxConcurrentTasks);
+        const settledResults = await Promise.allSettled(
+            lrcFiles.map((lrcFilePath) => limit(() => translateLrcFile(lrcFilePath)))
+        );
+
+        const processedFiles: ProcessedFile[] = [];
+        settledResults.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                if (result.value) processedFiles.push(result.value);
+                return;
+            }
+
+            const baseName = path.basename(lrcFiles[index], path.extname(lrcFiles[index]));
+            console.error(`[${baseName}] ❌ 翻译任务失败,跳过本文件: ${formatError(result.reason)}`);
+        });
 
         console.log('\n🎉 所有翻译任务完成！');
 

@@ -105,7 +105,7 @@ export function getConfig(): SubtitleConfig {
     const lrcSegmentationMode = parseLrcSegmentationMode(
         process.env.LRC_SEGMENTATION_MODE || 'heuristic'
     );
-    const lrcSegmentationModel = process.env.LRC_SEGMENTATION_MODEL || 'deepseek-v4-flash';
+    const lrcSegmentationModel = process.env.LRC_SEGMENTATION_MODEL || 'deepseek-v4-pro';
     const lrcSegmentationThinking = parseBoolEnv('LRC_SEGMENTATION_THINKING', true);
     const rawLrcSegmentationChunkWords = parsePositiveIntEnv(
         'LRC_SEGMENTATION_CHUNK_WORDS',
@@ -122,7 +122,8 @@ export function getConfig(): SubtitleConfig {
             Math.max(rawLrcSegmentationChunkWords, NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MIN),
             NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MAX
         );
-    const lrcSegmentationCritique = parseBoolEnv('LRC_SEGMENTATION_CRITIQUE', true);
+    const lrcSegmentationCritique = parseBoolEnv('LRC_SEGMENTATION_CRITIQUE', false);
+    const maxConcurrentTasks = parsePositiveIntEnv('MAX_CONCURRENT_TASKS', 4);
 
     if (!rootDir) throw new Error('请在 .env 文件中设置 ROOT_DIR(音频根目录路径)');
 
@@ -168,6 +169,7 @@ export function getConfig(): SubtitleConfig {
         lrcSegmentationChunkWords,
         lrcSegmentationThinking,    // NEW
         lrcSegmentationCritique,    // NEW
+        maxConcurrentTasks,
     };
 }
 

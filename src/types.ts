@@ -29,7 +29,7 @@ export interface SubtitleConfig {
     lrcSegmentationChunkWords: number;
     lrcSegmentationThinking: boolean;   // NEW
     lrcSegmentationCritique: boolean;   // NEW
-
+    maxConcurrentTasks: number;
 }
 
 export interface LanguageConfig {
