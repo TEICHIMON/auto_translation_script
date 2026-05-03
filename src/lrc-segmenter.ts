@@ -2,6 +2,7 @@ import axios from 'axios';
 import path from 'path';
 import { SubtitleConfig, WhisperSegment, WhisperTranscriptionResult, WhisperWord } from './types';
 import { writeTraceJson, writeTraceText } from './temp-trace';
+import { awaitManualInput, deriveTaskLabelFromChunkDir } from './manual-input';
 
 interface OpenAICompatibleResponse {
     choices?: Array<{
@@ -471,8 +472,19 @@ ${wordRows}`;
 // JSON parsing
 // =====================================================================
 
+function normalizeJsonLikeText(content: string): string {
+    return content
+        .replace(/^\uFEFF/, '')
+        .replace(/[“”„‟]/g, '"')
+        .replace(/[‘’‚‛]/g, "'");
+}
+
 function extractJson(content: string): unknown {
-    const trimmed = content.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const trimmed = normalizeJsonLikeText(content)
+        .trim()
+        .replace(/^```(?:json)?/i, '')
+        .replace(/```$/, '')
+        .trim();
 
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
         return JSON.parse(trimmed);
@@ -490,7 +502,7 @@ function extractJson(content: string): unknown {
         return JSON.parse(trimmed.slice(arrayStart, arrayEnd + 1));
     }
 
-    throw new LrcSegmentationError('DeepSeek 未返回 JSON');
+    throw new LrcSegmentationError('未返回 JSON');
 }
 
 function numberFromUnknown(value: unknown): number | null {
@@ -530,7 +542,7 @@ function parseBoundaries(content: string, totalWords: number): Boundary[] {
         : (parsed as { boundaries?: unknown }).boundaries;
 
     if (!Array.isArray(rawBoundaries)) {
-        throw new LrcSegmentationError('DeepSeek JSON 缺少 boundaries 数组');
+        throw new LrcSegmentationError('JSON 缺少 boundaries 数组');
     }
 
     const boundaries: Boundary[] = [];
@@ -1089,6 +1101,68 @@ async function requestBoundaries(
         critique: config.lrcSegmentationCritique,
     });
 
+    // ---- Manual mode: skip Layer 1 (LLM call) and Layer 2 (critique).
+    //      Still apply Layer 3 (mechanical shifter) at the end. ----
+    if (config.lrcSegmentationMode === 'manual') {
+        if (!chunkDir) {
+            throw new LrcSegmentationError(
+                'manual 模式需要 trace 目录(chunkDir 为空)'
+            );
+        }
+
+        const promptText = buildPrompt(words, lang, []);
+        const taskLabel = deriveTaskLabelFromChunkDir(chunkDir);
+        const chunkInfo = chunkIndex !== undefined ? `${chunkIndex}` : '0';
+
+        const manualBoundaries = await awaitManualInput<Boundary[]>({
+            chunkDir,
+            label: taskLabel,
+            chunkInfo,
+            prompt: promptText,
+            parser: (raw) => {
+                const parsed = parseBoundaries(raw, words.length);
+                const errs = validateBoundaries(parsed, words);
+                if (errs.length) {
+                    throw new LrcSegmentationError(
+                        `结构性错误 ${errs.length} 个: ${errs[0]}`
+                    );
+                }
+                return parsed;
+            }
+        });
+
+        await writeTraceJson(chunkDir, 'boundaries.initial.json', manualBoundaries);
+        await writeTraceText(chunkDir, 'manual.note.txt',
+            'manual mode: skipped Layer 1 (LLM) and Layer 2 (critique). Layer 3 (shifter) below.\n'
+        );
+
+        // ---- Layer 3: mechanical shifter (same as llm path) ----
+        let finalBoundaries = manualBoundaries;
+        try {
+            finalBoundaries = shiftBoundariesMechanically(manualBoundaries, words, lang);
+            const shiftValidationErrors = validateBoundaries(finalBoundaries, words);
+            if (shiftValidationErrors.length > 0) {
+                console.log(`  ⚠️  shifter 输出结构非法,回退: ${shiftValidationErrors[0]}`);
+                finalBoundaries = manualBoundaries;
+            } else {
+                const finalIssues = analyzeBoundaryIssues(finalBoundaries, words, lang);
+                const shiftedDiff = finalBoundaries.length - manualBoundaries.length;
+                console.log(
+                    `  🔧 shifter 完成: ${manualBoundaries.length} → ${finalBoundaries.length} 行 ` +
+                    `(${shiftedDiff >= 0 ? '+' : ''}${shiftedDiff}), 残余问题 ${finalIssues.length} 个`
+                );
+                await writeTraceJson(chunkDir, 'issues.final.json', finalIssues);
+            }
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.log(`  ⚠️  shifter 异常,回退: ${msg}`);
+            await writeTraceText(chunkDir, 'shifter.error.txt', msg);
+        }
+
+        await writeTraceJson(chunkDir, 'boundaries.final.json', finalBoundaries);
+        return finalBoundaries;
+    }
+
     // ---- Layer 1: initial pass (with thinking, if enabled) ----
     const initialBoundaries = await callAndValidateBoundaries(
         prevErrors => buildPrompt(words, lang, prevErrors),
@@ -1243,13 +1317,21 @@ export async function segmentWhisperResultWithDeepSeek(
         words: chunk.words
     })));
 
-    console.log(
-        `  🧠 DeepSeek LRC 分句: ${words.length} words, ` +
-        `${chunks.length} chunk(s), model=${config.lrcSegmentationModel}` +
-        (useSingleRequest ? ', single-request<=10min' : '') +
-        `, thinking=${config.lrcSegmentationThinking ? 'on' : 'off'}` +
-        `, critique=${config.lrcSegmentationCritique ? 'on' : 'off'}`
-    );
+    if (config.lrcSegmentationMode === 'manual') {
+        console.log(
+            `  ✋ Manual LRC 分句: ${words.length} words, ${chunks.length} chunk(s)` +
+            (useSingleRequest ? ', single-request<=10min' : '') +
+            ` — prompts will open as files for manual paste`
+        );
+    } else {
+        console.log(
+            `  🧠 DeepSeek LRC 分句: ${words.length} words, ` +
+            `${chunks.length} chunk(s), model=${config.lrcSegmentationModel}` +
+            (useSingleRequest ? ', single-request<=10min' : '') +
+            `, thinking=${config.lrcSegmentationThinking ? 'on' : 'off'}` +
+            `, critique=${config.lrcSegmentationCritique ? 'on' : 'off'}`
+        );
+    }
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];

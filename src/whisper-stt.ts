@@ -3,7 +3,7 @@ import path from 'path';
 import { getConfig } from './config';
 import { segmentWhisperResultWithDeepSeek } from './lrc-segmenter';
 import { WhisperTranscriptionResult } from './types';
-import { getActiveTaskDir, writeTraceJson, writeTraceText } from './temp-trace';
+import { writeTraceJson, writeTraceText } from './temp-trace';
 
 /**
  * Whisper 调用相关错误。捕获到此异常应中止整个流水线。
@@ -41,12 +41,12 @@ function cacheTimestamp(date: Date): string {
 
 async function saveWhisperResultSnapshot(
     result: WhisperTranscriptionResult,
-    audioPath: string
+    audioPath: string,
+    taskTraceDir?: string | null
 ): Promise<string | null> {
     try {
-        const taskDir = getActiveTaskDir();
-        if (taskDir) {
-            const whisperDir = path.join(taskDir, '01-whisper');
+        if (taskTraceDir) {
+            const whisperDir = path.join(taskTraceDir, '01-whisper');
             await writeTraceJson(whisperDir, 'meta.json', {
                 audioPath,
                 duration: result.duration,
@@ -227,12 +227,14 @@ async function fetchResult(jobId: string, serverUrl: string): Promise<WhisperTra
  * @param sttLang    语言代码,接受 'en'/'ja' 或 'en-US'/'ja-JP'(自动取前两位)
  * @param serverUrl  Whisper 服务器地址 (e.g. http://192.168.31.50:8000)
  * @param model      模型变体 ('default' | 'large-v3')
+ * @param taskTraceDir 当前处理任务的 trace 目录;必须显式传入以避免并发任务串目录
  */
 export async function generateLrcFromAudioWhisper(
     audioPath: string,
     sttLang: string,
     serverUrl: string,
-    model: string = 'default'
+    model: string = 'default',
+    taskTraceDir?: string | null
 ): Promise<string> {
     invocationCount++;
     const lang = sttLang.slice(0, 2).toLowerCase();
@@ -246,19 +248,24 @@ export async function generateLrcFromAudioWhisper(
 
     console.log(`📥 步骤 3/3: 取回 LRC 结果...`);
     const result = await fetchResult(job_id, serverUrl);
-    const snapshotPath = await saveWhisperResultSnapshot(result, audioPath);
+    const snapshotPath = await saveWhisperResultSnapshot(result, audioPath, taskTraceDir);
     if (snapshotPath) {
         console.log(`  💾 Whisper result 已保存: ${snapshotPath}`);
     }
     const config = getConfig();
 
-    if (config.lrcSegmentationMode === 'llm') {
+    if (config.lrcSegmentationMode === 'llm' || config.lrcSegmentationMode === 'manual') {
         try {
-            const taskDir = getActiveTaskDir();
             return await segmentWhisperResultWithDeepSeek(result, lang, config, {
-                traceDir: taskDir ? path.join(taskDir, '02-segmentation') : null
+                traceDir: taskTraceDir ? path.join(taskTraceDir, '02-segmentation') : null
             });
         } catch (error) {
+            // In manual mode, do NOT silently fall back to server LRC — the user
+            // explicitly opted in to manual control. Re-throw so the pipeline
+            // surfaces the failure (e.g. Ctrl-C during a wait).
+            if (config.lrcSegmentationMode === 'manual') {
+                throw error;
+            }
             console.log(`  ⚠️  DeepSeek 分句失败,回退服务端 LRC: ${error}`);
         }
     }

@@ -262,6 +262,37 @@ LRC_SEGMENTATION_MODEL=deepseek-v4-flash
 LRC_SEGMENTATION_CHUNK_WORDS=750
 ```
 
+### Manual 分句模式(用网页 LLM 替代 API)
+
+`LRC_SEGMENTATION_MODE=manual` 把每个 chunk 的 prompt 写到本地文件,
+等你手动用 Claude/ChatGPT/Gemini 网页跑完,把 JSON 响应粘回去保存,
+流水线就继续。比 deepseek-v4-pro thinking 模式快很多,且省 API 费用。
+
+工作流程(每个 chunk):
+
+1. 程序写出带字幕名和 chunk 编号的 `prompt.*.txt` / `response.*.txt` 到
+   `.tmp/runs/<run>/tasks/<task>/02-segmentation/chunk-NNN/manual/`
+2. prompt 自动复制到剪贴板,`prompt.*.txt` 和 `response.*.txt`
+   都会在默认编辑器打开,macOS 通知弹出
+3. 你粘贴到网页 LLM,等响应,把响应粘回对应的 `response.*.txt`,保存
+4. 程序检测到文件变化,解析 JSON,通过则继续;失败则报错并继续等待
+
+并发任务时多个 prompt 会同时排队。控制台每 5 秒打印还在等待的列表:
+
+```text
+⏳ Waiting on manual input:
+   [English-podcast_a] chunk 0 — 0:42 elapsed
+   [Japanese-show_b]   chunk 0 — 0:18 elapsed
+```
+
+依赖 macOS 自带的 `pbcopy`、`open -e`、`osascript`。其他平台仍可用,
+只是不会自动复制 / 弹通知;你需要手动打开对应的 `prompt.*.txt`。
+
+`MAX_DEEPSEEK_OUTPUT_TOKENS`、`LRC_SEGMENTATION_MODEL`、`THINKING`、
+`CRITIQUE` 在 manual 模式下都会被忽略 —— 由你决定用什么模型和深度。
+机械修边层(shifter)仍会运行,所以即使 LLM 偶尔吐出弱结尾,管道也会
+自动修掉。
+
 每次完整流水线运行会在 `.tmp/runs/` 下创建一个临时 trace 目录,并更新 `.tmp/runs/latest-run.txt`。每个处理文件会有独立 task 子目录,保存中间结果:
 
 ```text

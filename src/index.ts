@@ -150,7 +150,8 @@ async function processTask(
                 audioPath,
                 languageConfig.sttLanguageCode,
                 appConfig.whisperServerUrl,
-                appConfig.whisperModel
+                appConfig.whisperModel,
+                taskTraceDir
             );
             await writeTraceJson(taskTraceDir, '01-source-lrc/meta.json', {
                 source: 'whisper',
@@ -282,6 +283,8 @@ async function main() {
             `✂️  LRC 分句: ${
                 appConfig.lrcSegmentationMode === 'llm'
                     ? `DeepSeek/${appConfig.lrcSegmentationModel}`
+                    : appConfig.lrcSegmentationMode === 'manual'
+                        ? 'Manual/web LLM'
                     : '服务端启发式'
             }, critique=${appConfig.lrcSegmentationCritique ? 'on' : 'off'}`
         );

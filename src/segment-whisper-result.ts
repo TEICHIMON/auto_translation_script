@@ -125,12 +125,16 @@ async function main() {
 
     console.log(`📖 读取 Whisper result: ${inputPath}`);
     console.log(`🧾 replay trace: ${target.traceDir}`);
-    console.log(`✂️  使用当前 prompt 重新分句: lang=${lang}, model=${config.lrcSegmentationModel}`);
+    console.log(
+        `✂️  使用当前 prompt 重新分句: lang=${lang}, mode=${config.lrcSegmentationMode}` +
+        (config.lrcSegmentationMode === 'llm' ? `, model=${config.lrcSegmentationModel}` : '')
+    );
 
     await writeTraceJson(target.traceDir, '00-replay-meta.json', {
         createdAt: new Date().toISOString(),
         inputPath,
         lang,
+        mode: config.lrcSegmentationMode,
         model: config.lrcSegmentationModel
     });
 
