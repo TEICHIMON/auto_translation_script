@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import pLimit from 'p-limit';
 import { getConfig, getLanguageConfigFromPath } from './config';
 import { convertSrtFileToLrc } from './converter';
 import { translateWithOpenRouter } from './translator';
@@ -20,11 +21,34 @@ import {
 
 const AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg', '.wma'];
 
+interface ProcessTaskItem {
+    dirPath: string;
+    baseName: string;
+    audioPath?: string;
+    srtPath?: string;
+}
+
+interface ProcessedFile {
+    lrcPath: string;
+    audioBasePath: string;
+    languageFolder: string;
+    relativePath: string;
+}
+
+interface WhisperTaskFailure {
+    baseName: string;
+    error: WhisperError;
+}
+
+function formatError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * 核心任务处理:SRT 优先 → Whisper 兜底 → 翻译
  *
  * 错误策略:
- *   - WhisperError(服务端不可用/出错):向上抛,中止整个 main
+ *   - WhisperError(服务端不可用/出错):向上抛,由 main 聚合后统一处理
  *   - 其他错误(单文件解析、翻译 API 抖动):log 后返回 null,继续下一个
  */
 async function processTask(
@@ -32,12 +56,10 @@ async function processTask(
     baseName: string,
     audioPath?: string,
     srtPath?: string
-): Promise<{
-    lrcPath: string;
-    audioBasePath: string;
-    languageFolder: string;
-    relativePath: string;
-} | null> {
+): Promise<ProcessedFile | null> {
+    const log = (msg: string) => console.log(`[${baseName}] ${msg}`);
+    const logErr = (msg: string) => console.error(`[${baseName}] ${msg}`);
+
     const referencePath = audioPath || srtPath;
     if (!referencePath) return null;
 
@@ -50,7 +72,7 @@ async function processTask(
     const existingLrc = await findExistingBilingualLrc(outputBaseDir, '', baseName);
     if (existingLrc) {
         const displayPath = path.relative(languageRoot, existingLrc);
-        console.log(`⏭️  跳过: ${displayPath} (双语字幕已存在)`);
+        log(`⏭️  跳过: ${displayPath} (双语字幕已存在)`);
         return null;
     }
 
@@ -62,12 +84,12 @@ async function processTask(
     try {
         await fs.mkdir(outputDir, { recursive: true });
     } catch (error) {
-        console.error(`创建 output 文件夹失败: ${error}`);
+        logErr(`创建 output 文件夹失败: ${error}`);
         return null;
     }
 
     const displayPath = path.relative(languageRoot, referencePath);
-    console.log(`\n📝 处理任务: ${languageConfig.folderName}/${displayPath}`);
+    log(`📝 处理任务: ${languageConfig.folderName}/${displayPath}`);
     const taskTraceDir = await startTaskTrace(`${languageConfig.folderName}-${baseName}`, {
         baseName,
         languageFolder: languageConfig.folderName,
@@ -80,7 +102,7 @@ async function processTask(
         bilingualLrcPath
     });
     if (taskTraceDir) {
-        console.log(`  🧾 临时 trace: ${taskTraceDir}`);
+        log(`🧾 临时 trace: ${taskTraceDir}`);
     }
 
     let lrcContent: string;
@@ -88,7 +110,7 @@ async function processTask(
     // ---------------- 阶段 1: 获取单语 LRC ----------------
     try {
         await fs.access(monoLrcPath);
-        console.log('📖 阶段 1/3: 单语 LRC 已存在,跳过生成');
+        log('📖 阶段 1/3: 单语 LRC 已存在,跳过生成');
         lrcContent = await fs.readFile(monoLrcPath, 'utf-8');
         await writeTraceJson(taskTraceDir, '01-source-lrc/meta.json', {
             source: 'existing-lrc',
@@ -100,7 +122,7 @@ async function processTask(
         if (srtPath) {
             // 策略 A: 本地 SRT → 单语 LRC
             try {
-                console.log('🔄 阶段 1/3: 检测到本地 SRT,正在转换为单语 LRC...');
+                log('🔄 阶段 1/3: 检测到本地 SRT,正在转换为单语 LRC...');
                 const srtContent = await fs.readFile(srtPath, 'utf-8');
                 await writeTraceJson(taskTraceDir, '01-source-lrc/meta.json', {
                     source: 'srt',
@@ -110,20 +132,20 @@ async function processTask(
                 lrcContent = await convertSrtFileToLrc(srtPath);
                 await writeTraceText(taskTraceDir, '01-source-lrc/output.lrc', lrcContent);
                 await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
-                console.log(`💾 已保存本地单语 LRC: ${baseName}.lrc`);
+                log(`💾 已保存本地单语 LRC: ${baseName}.lrc`);
             } catch (e) {
-                console.error(`❌ SRT 转换失败,跳过本文件: ${e}`);
+                logErr(`❌ SRT 转换失败,跳过本文件: ${e}`);
                 return null;
             }
         } else {
             // 策略 B: 没有 SRT → Whisper 兜底
             const appConfig = getConfig();
             if (!appConfig.enableWhisperStt || !audioPath) {
-                console.log(`⚠️  跳过: 没有字幕文件,且 Whisper STT 未启用或缺少音频`);
+                log(`⚠️  跳过: 没有字幕文件,且 Whisper STT 未启用或缺少音频`);
                 return null;
             }
-            console.log('🎙️  阶段 1/3: 未检测到本地字幕,启动 Whisper 转录...');
-            // ⚠️ 这里抛出的 WhisperError 会向上传播,中止整个流水线
+            log('🎙️  阶段 1/3: 未检测到本地字幕,启动 Whisper 转录...');
+            // WhisperError 保持向上传播,由 main 在 allSettled 后聚合。
             lrcContent = await generateLrcFromAudioWhisper(
                 audioPath,
                 languageConfig.sttLanguageCode,
@@ -138,25 +160,25 @@ async function processTask(
             });
             await writeTraceText(taskTraceDir, '01-source-lrc/output.lrc', lrcContent);
             await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
-            console.log(`💾 已保存 Whisper 转录结果: ${baseName}.lrc`);
+            log(`💾 已保存 Whisper 转录结果: ${baseName}.lrc`);
         }
     }
 
     if (!lrcContent.trim()) {
-        console.log('⚠️  警告: 单语文本为空,终止本文件翻译');
+        log('⚠️  警告: 单语文本为空,终止本文件翻译');
         return null;
     }
 
     // ---------------- 阶段 2 & 3: 翻译与保存 ----------------
     try {
-        console.log('🌐 阶段 2/3: 调用大模型进行翻译...');
+        log('🌐 阶段 2/3: 调用大模型进行翻译...');
         const translatedContent = await translateWithOpenRouter(
             lrcContent,
             languageConfig.translationPrompt,
             taskTraceDir ? path.join(taskTraceDir, '03-translation') : null
         );
 
-        console.log('💾 阶段 3/3: 保存双语 LRC 文件...');
+        log('💾 阶段 3/3: 保存双语 LRC 文件...');
         await fs.writeFile(bilingualLrcPath, translatedContent, 'utf-8');
         await writeTraceJson(taskTraceDir, '04-output/meta.json', {
             monoLrcPath,
@@ -166,7 +188,7 @@ async function processTask(
         await writeTraceText(taskTraceDir, '04-output/bilingual.lrc', translatedContent);
 
         const outputDisplayPath = path.relative(languageRoot, bilingualLrcPath);
-        console.log(`✅ 翻译完成: ${languageConfig.folderName}/${outputDisplayPath}`);
+        log(`✅ 翻译完成: ${languageConfig.folderName}/${outputDisplayPath}`);
 
         return {
             lrcPath: bilingualLrcPath,
@@ -175,14 +197,13 @@ async function processTask(
             relativePath: ''
         };
     } catch (error) {
-        console.error(`❌ 翻译/保存失败,跳过本文件: ${error}`);
+        logErr(`❌ 翻译/保存失败,跳过本文件: ${error}`);
         return null;
     }
 }
 
-async function scanAndProcess(dirPath: string): Promise<Array<any>> {
-    const processedFiles: Array<any> = [];
-
+async function scanAndProcess(dirPath: string): Promise<ProcessTaskItem[]> {
+    const tasks: ProcessTaskItem[] = [];
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
     const itemMap = new Map<string, { audioPath?: string; srtPath?: string }>();
 
@@ -191,8 +212,8 @@ async function scanAndProcess(dirPath: string): Promise<Array<any>> {
 
         if (entry.isDirectory()) {
             if (entry.name === 'output') continue;
-            const subResults = await scanAndProcess(fullPath);
-            processedFiles.push(...subResults);
+            const subTasks = await scanAndProcess(fullPath);
+            tasks.push(...subTasks);
         } else if (entry.isFile()) {
             const ext = path.extname(entry.name).toLowerCase();
             const baseName = entry.name.slice(0, -ext.length);
@@ -208,12 +229,15 @@ async function scanAndProcess(dirPath: string): Promise<Array<any>> {
     }
 
     for (const [baseName, item] of itemMap) {
-        // WhisperError 会向上抛,中止本目录及后续扫描
-        const result = await processTask(dirPath, baseName, item.audioPath, item.srtPath);
-        if (result) processedFiles.push(result);
+        tasks.push({
+            dirPath,
+            baseName,
+            audioPath: item.audioPath,
+            srtPath: item.srtPath
+        });
     }
 
-    return processedFiles;
+    return tasks;
 }
 
 async function main() {
@@ -226,6 +250,7 @@ async function main() {
     console.log('🎬 字幕自动翻译工具 - 混合调度模式 (SRT 优先 / Whisper 兜底)\n');
 
     let appConfig: ReturnType<typeof getConfig> | null = null;
+    let exitAfterCleanup = false;
 
     try {
         appConfig = getConfig();
@@ -238,11 +263,14 @@ async function main() {
             whisperModel: appConfig.whisperModel,
             lrcSegmentationMode: appConfig.lrcSegmentationMode,
             lrcSegmentationModel: appConfig.lrcSegmentationModel,
-            lrcSegmentationChunkWords: appConfig.lrcSegmentationChunkWords
+            lrcSegmentationChunkWords: appConfig.lrcSegmentationChunkWords,
+            lrcSegmentationCritique: appConfig.lrcSegmentationCritique,
+            maxConcurrentTasks: appConfig.maxConcurrentTasks
         });
         console.log(`📂 根目录: ${appConfig.rootDir}`);
         console.log(`🧾 临时 trace 目录: ${traceDir}`);
         console.log(`🤖 翻译模型: ${appConfig.translationProvider}/${appConfig.currentModel}`);
+        console.log(`🚦 最大并发任务数: ${appConfig.maxConcurrentTasks}`);
         console.log(
             `🎙️  Whisper STT: ${
                 appConfig.enableWhisperStt
@@ -255,25 +283,63 @@ async function main() {
                 appConfig.lrcSegmentationMode === 'llm'
                     ? `DeepSeek/${appConfig.lrcSegmentationModel}`
                     : '服务端启发式'
-            }`
+            }, critique=${appConfig.lrcSegmentationCritique ? 'on' : 'off'}`
         );
         if (appConfig.syncDir) console.log(`📦 同步目录: ${appConfig.syncDir}`);
         console.log('\n开始扫描文件夹...');
 
-        const processedFiles = await scanAndProcess(appConfig.rootDir);
+        const tasks = await scanAndProcess(appConfig.rootDir);
+        console.log(`🔎 发现待处理任务: ${tasks.length}`);
+
+        const limit = pLimit(appConfig.maxConcurrentTasks);
+        const settledResults = await Promise.allSettled(
+            tasks.map((task) =>
+                limit(() => processTask(task.dirPath, task.baseName, task.audioPath, task.srtPath))
+            )
+        );
+
+        const processedFiles: ProcessedFile[] = [];
+        const whisperFailures: WhisperTaskFailure[] = [];
+
+        settledResults.forEach((result, index) => {
+            const task = tasks[index];
+            if (result.status === 'fulfilled') {
+                if (result.value) processedFiles.push(result.value);
+                return;
+            }
+
+            if (result.reason instanceof WhisperError) {
+                whisperFailures.push({
+                    baseName: task.baseName,
+                    error: result.reason
+                });
+                return;
+            }
+
+            console.error(`[${task.baseName}] ❌ 任务失败,跳过本文件: ${formatError(result.reason)}`);
+        });
 
         console.log('\n🎉 所有任务处理完成!');
 
         if (processedFiles.length > 0 && appConfig.syncDir) {
             await batchSyncFiles(processedFiles);
         }
+
+        if (whisperFailures.length > 0) {
+            console.error(`\n❌ Whisper 错误 ${whisperFailures.length} 次,服务端可能不可用`);
+            for (const failure of whisperFailures) {
+                console.error(`  - ${failure.baseName}: ${formatError(failure.error)}`);
+            }
+            exitAfterCleanup = true;
+        }
     } catch (error) {
         if (error instanceof WhisperError) {
             console.error(`\n❌ Whisper 服务异常,流水线已中止: ${error.message}`);
+            exitAfterCleanup = true;
         } else {
             console.error(`\n❌ 致命错误,流水线已中止: ${error}`);
+            process.exitCode = 1;
         }
-        process.exitCode = 1;
     } finally {
         // 仅在本轮真的用过 Whisper 时才发 release
         if (
@@ -282,6 +348,9 @@ async function main() {
             getWhisperInvocationCount() > 0
         ) {
             await releaseWhisperVram(appConfig.whisperServerUrl);
+        }
+        if (exitAfterCleanup) {
+            process.exit(1);
         }
     }
 }
