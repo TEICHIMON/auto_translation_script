@@ -259,7 +259,38 @@ WHISPER_MODEL=default
 # 使用 DeepSeek 根据 word timestamps 重新分句
 LRC_SEGMENTATION_MODE=llm
 LRC_SEGMENTATION_MODEL=deepseek-v4-flash
-LRC_SEGMENTATION_CHUNK_WORDS=900
+LRC_SEGMENTATION_CHUNK_WORDS=5000
+```
+
+每次完整流水线运行会在 `.tmp/runs/` 下创建一个临时 trace 目录,并更新 `.tmp/runs/latest-run.txt`。每个处理文件会有独立 task 子目录,保存中间结果:
+
+```text
+.tmp/runs/<run>/tasks/<task>/
+├── 00-meta.json
+├── 01-whisper/result.json
+├── 01-whisper/server.lrc
+├── 01-source-lrc/output.lrc
+├── 02-segmentation/words.json
+├── 02-segmentation/chunks.json
+├── 02-segmentation/chunk-000/attempt-0.prompt.txt
+├── 02-segmentation/chunk-000/attempt-0.response.txt
+├── 02-segmentation/final.lrc
+├── 03-translation/full-prompt.txt
+├── 03-translation/response.lrc
+└── 04-output/bilingual.lrc
+```
+
+修改 `src/lrc-segmenter.ts` 里的分句 prompt 后,可直接重放最新 run 的最新 task:
+
+```bash
+npm run dev:segment
+```
+
+也可以指定某个 task 目录或 Whisper result:
+
+```bash
+npm run dev:segment -- .tmp/runs/<run>/tasks/<task>
+npm run dev:segment -- .tmp/runs/<run>/tasks/<task>/01-whisper/result.json
 ```
 
 ## 故障排除

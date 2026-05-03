@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getConfig } from './config';
+import { writeTraceJson, writeTraceText } from './temp-trace';
 
 interface OpenAICompatibleResponse {
     choices?: Array<{
@@ -123,13 +124,25 @@ async function callDeepSeek(
  */
 export async function translateWithOpenRouter(
     lrcContent: string,
-    prompt: string
+    prompt: string,
+    traceDir?: string | null
 ): Promise<string> {
     const config = getConfig();
     const provider = config.translationProvider;
     const fullPrompt = `${prompt}\n\n${lrcContent}`;
 
     console.log(`正在调用 ${provider.toUpperCase()} API (${config.currentModel}) 翻译...`);
+
+    await writeTraceJson(traceDir, 'meta.json', {
+        provider,
+        model: config.currentModel,
+        inputLrcLength: lrcContent.length,
+        promptLength: prompt.length,
+        fullPromptLength: fullPrompt.length
+    });
+    await writeTraceText(traceDir, 'input.lrc', lrcContent);
+    await writeTraceText(traceDir, 'prompt.txt', prompt);
+    await writeTraceText(traceDir, 'full-prompt.txt', fullPrompt);
 
     try {
         let result: string;
@@ -174,9 +187,14 @@ export async function translateWithOpenRouter(
         }
 
         console.log('翻译完成！');
+        await writeTraceText(traceDir, 'response.lrc', result);
         return result;
 
     } catch (error) {
+        await writeTraceJson(traceDir, 'error.json', {
+            message: error instanceof Error ? error.message : String(error)
+        });
+
         if (axios.isAxiosError(error)) {
             const status = error.response?.status ?? 'NO_RESPONSE';
             const detail = error.response?.data
