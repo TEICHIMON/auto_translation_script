@@ -3,6 +3,7 @@ import path from 'path';
 import { getConfig } from './config';
 import { segmentWhisperResultWithDeepSeek } from './lrc-segmenter';
 import { WhisperTranscriptionResult } from './types';
+import { getActiveTaskDir, writeTraceJson, writeTraceText } from './temp-trace';
 
 /**
  * Whisper 调用相关错误。捕获到此异常应中止整个流水线。
@@ -23,6 +24,54 @@ interface JobSubmitResponse {
 let invocationCount = 0;
 export function getWhisperInvocationCount(): number {
     return invocationCount;
+}
+
+const WHISPER_RESULT_TMP_DIR = path.join(process.cwd(), '.tmp', 'whisper-results');
+
+function safeFileStem(filePath: string): string {
+    const parsed = path.parse(filePath);
+    const stem = parsed.name || parsed.base || 'audio';
+    const safe = stem.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+    return (safe || 'audio').slice(0, 80);
+}
+
+function cacheTimestamp(date: Date): string {
+    return date.toISOString().replace(/[:.]/g, '-');
+}
+
+async function saveWhisperResultSnapshot(
+    result: WhisperTranscriptionResult,
+    audioPath: string
+): Promise<string | null> {
+    try {
+        const taskDir = getActiveTaskDir();
+        if (taskDir) {
+            const whisperDir = path.join(taskDir, '01-whisper');
+            await writeTraceJson(whisperDir, 'meta.json', {
+                audioPath,
+                duration: result.duration,
+                lang: result.lang,
+                modelKey: result.model_key,
+                segmentCount: result.segments?.length || 0
+            });
+            await writeTraceJson(whisperDir, 'result.json', result);
+            await writeTraceText(whisperDir, 'server.lrc', result.lrc || '');
+            return path.join(whisperDir, 'result.json');
+        }
+
+        await fs.mkdir(WHISPER_RESULT_TMP_DIR, { recursive: true });
+        const json = JSON.stringify(result, null, 2);
+        const fileName = `${cacheTimestamp(new Date())}-${safeFileStem(audioPath)}.json`;
+        const snapshotPath = path.join(WHISPER_RESULT_TMP_DIR, fileName);
+        const latestPath = path.join(WHISPER_RESULT_TMP_DIR, 'latest.json');
+
+        await fs.writeFile(snapshotPath, json, 'utf-8');
+        await fs.writeFile(latestPath, json, 'utf-8');
+        return snapshotPath;
+    } catch (error) {
+        console.log(`  ⚠️  保存 Whisper result 临时文件失败: ${error}`);
+        return null;
+    }
 }
 
 /**
@@ -197,11 +246,18 @@ export async function generateLrcFromAudioWhisper(
 
     console.log(`📥 步骤 3/3: 取回 LRC 结果...`);
     const result = await fetchResult(job_id, serverUrl);
+    const snapshotPath = await saveWhisperResultSnapshot(result, audioPath);
+    if (snapshotPath) {
+        console.log(`  💾 Whisper result 已保存: ${snapshotPath}`);
+    }
     const config = getConfig();
 
     if (config.lrcSegmentationMode === 'llm') {
         try {
-            return await segmentWhisperResultWithDeepSeek(result, lang, config);
+            const taskDir = getActiveTaskDir();
+            return await segmentWhisperResultWithDeepSeek(result, lang, config, {
+                traceDir: taskDir ? path.join(taskDir, '02-segmentation') : null
+            });
         } catch (error) {
             console.log(`  ⚠️  DeepSeek 分句失败,回退服务端 LRC: ${error}`);
         }

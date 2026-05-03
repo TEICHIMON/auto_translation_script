@@ -9,10 +9,12 @@
     "translate": "node dist/translate-lrc.js",
     "sync": "node dist/sync-only.js",
     "convert": "node dist/convert-only.js",
+    "segment": "node dist/segment-whisper-result.js",
     "dev": "ts-node src/index.ts",
     "dev:translate": "ts-node src/translate-lrc.ts",
     "dev:sync": "ts-node src/sync-only.ts",
-    "dev:convert": "ts-node src/convert-only.ts"
+    "dev:convert": "ts-node src/convert-only.ts",
+    "dev:segment": "ts-node src/segment-whisper-result.ts"
   },
   "keywords": [
     "subtitle",

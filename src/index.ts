@@ -6,6 +6,12 @@ import { translateWithOpenRouter } from './translator';
 import { batchSyncFiles } from './sync';
 import { getCurrentYearMonth, findExistingBilingualLrc, buildOutputDir } from './utils';
 import {
+    startPipelineTrace,
+    startTaskTrace,
+    writeTraceJson,
+    writeTraceText
+} from './temp-trace';
+import {
     generateLrcFromAudioWhisper,
     releaseWhisperVram,
     getWhisperInvocationCount,
@@ -62,6 +68,20 @@ async function processTask(
 
     const displayPath = path.relative(languageRoot, referencePath);
     console.log(`\n📝 处理任务: ${languageConfig.folderName}/${displayPath}`);
+    const taskTraceDir = await startTaskTrace(`${languageConfig.folderName}-${baseName}`, {
+        baseName,
+        languageFolder: languageConfig.folderName,
+        sourceLanguage: languageConfig.sourceLanguage,
+        targetLanguage: languageConfig.targetLanguage,
+        referencePath,
+        audioPath,
+        srtPath,
+        monoLrcPath,
+        bilingualLrcPath
+    });
+    if (taskTraceDir) {
+        console.log(`  🧾 临时 trace: ${taskTraceDir}`);
+    }
 
     let lrcContent: string;
 
@@ -70,12 +90,25 @@ async function processTask(
         await fs.access(monoLrcPath);
         console.log('📖 阶段 1/3: 单语 LRC 已存在,跳过生成');
         lrcContent = await fs.readFile(monoLrcPath, 'utf-8');
+        await writeTraceJson(taskTraceDir, '01-source-lrc/meta.json', {
+            source: 'existing-lrc',
+            path: monoLrcPath
+        });
+        await writeTraceText(taskTraceDir, '01-source-lrc/input.lrc', lrcContent);
+        await writeTraceText(taskTraceDir, '01-source-lrc/output.lrc', lrcContent);
     } catch {
         if (srtPath) {
             // 策略 A: 本地 SRT → 单语 LRC
             try {
                 console.log('🔄 阶段 1/3: 检测到本地 SRT,正在转换为单语 LRC...');
+                const srtContent = await fs.readFile(srtPath, 'utf-8');
+                await writeTraceJson(taskTraceDir, '01-source-lrc/meta.json', {
+                    source: 'srt',
+                    path: srtPath
+                });
+                await writeTraceText(taskTraceDir, '01-source-lrc/input.srt', srtContent);
                 lrcContent = await convertSrtFileToLrc(srtPath);
+                await writeTraceText(taskTraceDir, '01-source-lrc/output.lrc', lrcContent);
                 await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
                 console.log(`💾 已保存本地单语 LRC: ${baseName}.lrc`);
             } catch (e) {
@@ -97,6 +130,13 @@ async function processTask(
                 appConfig.whisperServerUrl,
                 appConfig.whisperModel
             );
+            await writeTraceJson(taskTraceDir, '01-source-lrc/meta.json', {
+                source: 'whisper',
+                audioPath,
+                model: appConfig.whisperModel,
+                lang: languageConfig.sttLanguageCode
+            });
+            await writeTraceText(taskTraceDir, '01-source-lrc/output.lrc', lrcContent);
             await fs.writeFile(monoLrcPath, lrcContent, 'utf-8');
             console.log(`💾 已保存 Whisper 转录结果: ${baseName}.lrc`);
         }
@@ -112,11 +152,18 @@ async function processTask(
         console.log('🌐 阶段 2/3: 调用大模型进行翻译...');
         const translatedContent = await translateWithOpenRouter(
             lrcContent,
-            languageConfig.translationPrompt
+            languageConfig.translationPrompt,
+            taskTraceDir ? path.join(taskTraceDir, '03-translation') : null
         );
 
         console.log('💾 阶段 3/3: 保存双语 LRC 文件...');
         await fs.writeFile(bilingualLrcPath, translatedContent, 'utf-8');
+        await writeTraceJson(taskTraceDir, '04-output/meta.json', {
+            monoLrcPath,
+            bilingualLrcPath
+        });
+        await writeTraceText(taskTraceDir, '04-output/mono.lrc', lrcContent);
+        await writeTraceText(taskTraceDir, '04-output/bilingual.lrc', translatedContent);
 
         const outputDisplayPath = path.relative(languageRoot, bilingualLrcPath);
         console.log(`✅ 翻译完成: ${languageConfig.folderName}/${outputDisplayPath}`);
@@ -182,7 +229,19 @@ async function main() {
 
     try {
         appConfig = getConfig();
+        const traceDir = await startPipelineTrace('pipeline', {
+            rootDir: appConfig.rootDir,
+            translationProvider: appConfig.translationProvider,
+            currentModel: appConfig.currentModel,
+            enableWhisperStt: appConfig.enableWhisperStt,
+            whisperServerUrl: appConfig.whisperServerUrl,
+            whisperModel: appConfig.whisperModel,
+            lrcSegmentationMode: appConfig.lrcSegmentationMode,
+            lrcSegmentationModel: appConfig.lrcSegmentationModel,
+            lrcSegmentationChunkWords: appConfig.lrcSegmentationChunkWords
+        });
         console.log(`📂 根目录: ${appConfig.rootDir}`);
+        console.log(`🧾 临时 trace 目录: ${traceDir}`);
         console.log(`🤖 翻译模型: ${appConfig.translationProvider}/${appConfig.currentModel}`);
         console.log(
             `🎙️  Whisper STT: ${
