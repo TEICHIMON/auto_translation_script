@@ -259,7 +259,7 @@ WHISPER_MODEL=default
 # 使用 DeepSeek 根据 word timestamps 重新分句
 LRC_SEGMENTATION_MODE=llm
 LRC_SEGMENTATION_MODEL=deepseek-v4-flash
-LRC_SEGMENTATION_CHUNK_WORDS=5000
+LRC_SEGMENTATION_CHUNK_WORDS=750
 ```
 
 每次完整流水线运行会在 `.tmp/runs/` 下创建一个临时 trace 目录,并更新 `.tmp/runs/latest-run.txt`。每个处理文件会有独立 task 子目录,保存中间结果:
