@@ -6,6 +6,13 @@ dotenv.config();
 
 export const DELIMITER = '|||';
 
+const THINKING_LRC_SEGMENTATION_CHUNK_WORDS_DEFAULT = 750;
+const THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MIN = 700;
+const THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MAX = 2500;
+const NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_DEFAULT = 5000;
+const NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MIN = 200;
+const NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MAX = 8000;
+
 const LANGUAGE_CONFIGS: LanguageConfig[] = [
     {
         folderName: 'English',
@@ -99,11 +106,22 @@ export function getConfig(): SubtitleConfig {
         process.env.LRC_SEGMENTATION_MODE || 'heuristic'
     );
     const lrcSegmentationModel = process.env.LRC_SEGMENTATION_MODEL || 'deepseek-v4-flash';
-    const lrcSegmentationChunkWords = Math.min(
-        Math.max(parsePositiveIntEnv('LRC_SEGMENTATION_CHUNK_WORDS', 5000), 200),
-        8000
-    );
     const lrcSegmentationThinking = parseBoolEnv('LRC_SEGMENTATION_THINKING', true);
+    const rawLrcSegmentationChunkWords = parsePositiveIntEnv(
+        'LRC_SEGMENTATION_CHUNK_WORDS',
+        lrcSegmentationThinking
+            ? THINKING_LRC_SEGMENTATION_CHUNK_WORDS_DEFAULT
+            : NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_DEFAULT
+    );
+    const lrcSegmentationChunkWords = lrcSegmentationThinking
+        ? Math.min(
+            Math.max(rawLrcSegmentationChunkWords, THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MIN),
+            THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MAX
+        )
+        : Math.min(
+            Math.max(rawLrcSegmentationChunkWords, NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MIN),
+            NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MAX
+        );
     const lrcSegmentationCritique = parseBoolEnv('LRC_SEGMENTATION_CRITIQUE', true);
 
     if (!rootDir) throw new Error('请在 .env 文件中设置 ROOT_DIR(音频根目录路径)');

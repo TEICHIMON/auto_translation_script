@@ -576,33 +576,55 @@ function lineWordCount(boundary: Boundary): number {
 }
 
 // =====================================================================
-// Validation (structural — same as before)
+// Validation (structural)
 // =====================================================================
 
 function validateBoundaries(
     boundaries: Boundary[],
     words: WhisperWord[]
 ): string[] {
+    const errors: string[] = [];
+
     if (!boundaries.length) {
-        return ['DeepSeek 返回了空 boundaries'];
+        errors.push('DeepSeek 返回了空 boundaries');
+        return errors;
     }
 
     let expectedStart = 0;
     for (let i = 0; i < boundaries.length; i++) {
         const b = boundaries[i];
+
         if (b.start !== expectedStart) {
-            return [`boundary[${i}] 不连续: expected start ${expectedStart}, got ${b.start}`];
+            const detail = b.start > expectedStart
+                ? `缺失 words ${expectedStart}-${b.start - 1}`
+                : `重叠/倒退到 word ${b.start}`;
+            errors.push(
+                `boundary[${i}] 不连续: expected start ${expectedStart}, got ${b.start} (${detail})`
+            );
         }
-        if (b.end < b.start || b.end >= words.length) {
-            return [`boundary[${i}] 范围非法: start=${b.start}, end=${b.end}, total=${words.length}`];
+
+        if (
+            !Number.isInteger(b.start) ||
+            !Number.isInteger(b.end) ||
+            b.start < 0 ||
+            b.end < 0 ||
+            b.start >= words.length ||
+            b.end >= words.length ||
+            b.end < b.start
+        ) {
+            errors.push(
+                `boundary[${i}] 范围非法: start=${b.start}, end=${b.end}, total=${words.length}`
+            );
         }
+
         expectedStart = b.end + 1;
     }
+
     if (expectedStart !== words.length) {
-        return [`boundaries 未覆盖所有 words: ended at ${expectedStart}, total ${words.length}`];
+        errors.push(`boundaries 未覆盖所有 words: ended at ${expectedStart}, total ${words.length}`);
     }
 
-    return [];
+    return errors;
 }
 
 // =====================================================================
@@ -874,7 +896,7 @@ async function callAndValidateBoundaries(
             return boundaries;
         }
 
-        previousErrors = errors.slice(0, 12);
+        previousErrors = errors;
 
         if (attempt === MAX_RETRIES) {
             throw new LrcSegmentationError(
@@ -1052,10 +1074,9 @@ async function requestBoundaries(
     traceDir?: string | null,
     chunkIndex?: number
 ): Promise<Boundary[]> {
-    const maxTokens = Math.min(
-        MAX_DEEPSEEK_OUTPUT_TOKENS,
-        Math.max(2048, Math.ceil(words.length * 3))
-    );
+    // Thinking mode spends generation budget on reasoning_content before the
+    // final JSON, so keep this as a real ceiling instead of scaling by word count.
+    const maxTokens = MAX_DEEPSEEK_OUTPUT_TOKENS;
     const chunkDir = traceDir && chunkIndex !== undefined
         ? path.join(traceDir, `chunk-${String(chunkIndex).padStart(3, '0')}`)
         : null;
@@ -1188,7 +1209,7 @@ export async function segmentWhisperResultWithDeepSeek(
     // model can actually keep its attention on the full word list. Past ~800
     // words we see thinking-mode degenerate into mechanical fixed-width chunks,
     // so cap single-request by word count, not just duration.
-    const SINGLE_REQUEST_MAX_WORDS = config.lrcSegmentationThinking ? 800 : 2500;
+    const SINGLE_REQUEST_MAX_WORDS = config.lrcSegmentationThinking ? 2500 : 2500;
 
     const useSingleRequest =
         Number.isFinite(result.duration) &&
