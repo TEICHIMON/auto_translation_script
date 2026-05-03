@@ -103,6 +103,8 @@ export function getConfig(): SubtitleConfig {
         Math.max(parsePositiveIntEnv('LRC_SEGMENTATION_CHUNK_WORDS', 5000), 200),
         8000
     );
+    const lrcSegmentationThinking = parseBoolEnv('LRC_SEGMENTATION_THINKING', true);
+    const lrcSegmentationCritique = parseBoolEnv('LRC_SEGMENTATION_CRITIQUE', true);
 
     if (!rootDir) throw new Error('请在 .env 文件中设置 ROOT_DIR(音频根目录路径)');
 
@@ -124,6 +126,7 @@ export function getConfig(): SubtitleConfig {
         throw new Error('开启了 Whisper STT,但未在 .env 中配置 WHISPER_SERVER_URL');
     }
 
+
     return {
         rootDir,
         languageFolders: LANGUAGE_CONFIGS,
@@ -144,7 +147,9 @@ export function getConfig(): SubtitleConfig {
         whisperAutoRelease,
         lrcSegmentationMode,
         lrcSegmentationModel,
-        lrcSegmentationChunkWords
+        lrcSegmentationChunkWords,
+        lrcSegmentationThinking,    // NEW
+        lrcSegmentationCritique,    // NEW
     };
 }
 
@@ -166,4 +171,15 @@ export function getLanguageConfigFromPath(
 
 export function getRelativePathFromLanguageRoot(filePath: string, languageRoot: string): string {
     return path.relative(path.normalize(languageRoot), path.normalize(filePath));
+}
+
+// 1. Add this small helper near the top, alongside parsePositiveIntEnv:
+
+function parseBoolEnv(name: string, defaultValue: boolean): boolean {
+    const raw = process.env[name];
+    if (raw === undefined || raw.trim() === '') return defaultValue;
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+    throw new Error(`${name} 必须是 true/false`);
 }
