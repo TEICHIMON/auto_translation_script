@@ -18,6 +18,8 @@ export interface SubtitleConfig {
     openRouterApiUrl: string;
     deepSeekApiKey: string;
     deepSeekApiUrl: string;
+    translationChunkLines: number;
+    translationMaxTokens: number;
     // Whisper STT 配置
     enableWhisperStt: boolean;
     whisperServerUrl: string;

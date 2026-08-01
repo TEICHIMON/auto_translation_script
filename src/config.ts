@@ -13,6 +13,14 @@ const NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_DEFAULT = 5000;
 const NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MIN = 200;
 const NON_THINKING_LRC_SEGMENTATION_CHUNK_WORDS_MAX = 8000;
 
+// Translation is sent one chunk at a time so a long file can never exceed the
+// model's output limit and come back silently truncated. Each output line is
+// roughly twice the input line (original + translation), so keep chunks small.
+const TRANSLATION_CHUNK_LINES_DEFAULT = 120;
+const TRANSLATION_CHUNK_LINES_MIN = 20;
+const TRANSLATION_CHUNK_LINES_MAX = 400;
+const TRANSLATION_MAX_TOKENS_DEFAULT = 8000;
+
 const LANGUAGE_CONFIGS: LanguageConfig[] = [
     {
         folderName: 'English',
@@ -95,6 +103,18 @@ export function getConfig(): SubtitleConfig {
     const deepSeekApiKey = process.env.DEEPSEEK_API_KEY || '';
     const deepSeekApiUrl = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
 
+    const translationChunkLines = Math.min(
+        Math.max(
+            parsePositiveIntEnv('TRANSLATION_CHUNK_LINES', TRANSLATION_CHUNK_LINES_DEFAULT),
+            TRANSLATION_CHUNK_LINES_MIN
+        ),
+        TRANSLATION_CHUNK_LINES_MAX
+    );
+    const translationMaxTokens = parsePositiveIntEnv(
+        'TRANSLATION_MAX_TOKENS',
+        TRANSLATION_MAX_TOKENS_DEFAULT
+    );
+
     // Whisper STT 配置
     const enableWhisperStt = (process.env.ENABLE_WHISPER_STT || 'true').toLowerCase() === 'true';
     const whisperServerUrl = process.env.WHISPER_SERVER_URL || '';
@@ -161,6 +181,8 @@ export function getConfig(): SubtitleConfig {
         openRouterApiUrl,
         deepSeekApiKey,
         deepSeekApiUrl,
+        translationChunkLines,
+        translationMaxTokens,
         enableWhisperStt,
         whisperServerUrl,
         whisperModel,
