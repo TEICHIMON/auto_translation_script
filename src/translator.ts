@@ -107,6 +107,35 @@ export function validateChunkReply(chunkIndex: number, source: string, reply: st
 }
 
 /**
+ * Rebuild a translated chunk as `<source timestamp><source text>|||<translation>`.
+ *
+ * Only the translation is actually wanted from the model, but it also retypes
+ * the timestamp and the original text, and it does not always do so faithfully:
+ * observed drifts include a stamp moving 28:59.16 -> 29:00.16 (which in audio
+ * mode shifts a cut point), half-width punctuation being "corrected", and a
+ * stray character inserted into the original sentence. Taking the timestamp and
+ * the source text from the input makes that whole class of damage impossible.
+ *
+ * Call only after the line counts match, so line i of the reply really is the
+ * translation of line i of the source.
+ */
+export function restoreSourceColumns(source: string, reply: string): string {
+    const sourceLines = source.split('\n').filter(isLrcLine).map((line) => line.trim());
+
+    let i = 0;
+    return reply
+        .split('\n')
+        .map((line) => {
+            if (!isLrcLine(line)) return line;
+            const original = sourceLines[i++];
+            if (!original) return line;
+            const translation = line.slice(line.indexOf(DELIMITER) + DELIMITER.length).trim();
+            return `${original}${DELIMITER}${translation}`;
+        })
+        .join('\n');
+}
+
+/**
  * 调用 OpenAI 兼容的 Chat Completions API
  */
 async function callOpenAICompatible(
@@ -287,9 +316,10 @@ async function translateChunk(
                 );
             }
             validateChunkReply(chunkIndex, chunk, cleaned);
+            const aligned = restoreSourceColumns(chunk, cleaned);
 
-            console.log(`  ✅ 翻译分块 ${chunkIndex + 1}/${chunkCount} (${countLrcLines(cleaned)} 行)`);
-            return cleaned;
+            console.log(`  ✅ 翻译分块 ${chunkIndex + 1}/${chunkCount} (${countLrcLines(aligned)} 行)`);
+            return aligned;
         } catch (error) {
             lastError = error instanceof Error ? error : new Error(String(error));
             if (attempt < CHUNK_ATTEMPTS) {
