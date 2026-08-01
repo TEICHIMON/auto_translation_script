@@ -262,6 +262,26 @@ LRC_SEGMENTATION_MODEL=deepseek-v4-flash
 LRC_SEGMENTATION_CHUNK_WORDS=750
 ```
 
+### 翻译分块与完整性校验
+
+翻译**按块发送**,不再整段一次性丢给模型 —— 整段发出去会撞上输出 token 上限,
+模型会返回一份格式正确、但只翻了前面一部分的译文,后面的字幕静默消失。
+
+```env
+TRANSLATION_CHUNK_LINES=120   # 每次请求最多翻译多少行(20-400)
+TRANSLATION_MAX_TOKENS=8000   # 单次请求输出 token 上限
+```
+
+每块返回后都会校验,任一项不通过就重试(最多 3 次),仍失败则**整个文件报错**,
+绝不写出残缺译文:
+
+- `finish_reason=length` / `stop_reason=max_tokens` —— 模型自己报告被截断
+- 输出行数必须等于输入行数
+- 每一行都必须含有 `|||` 分隔符
+
+trace 里每块的输入、每次尝试的输出都会落盘到
+`.tmp/runs/<run>/tasks/<task>/03-translation/chunks/chunk-NNN/`。
+
 ### Manual 分句模式(用网页 LLM 替代 API)
 
 `LRC_SEGMENTATION_MODE=manual` 把每个 chunk 的 prompt 写到本地文件,
